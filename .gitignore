@@ -1,0 +1,39 @@
+# ==========================================
+# Entorno virtual
+# ==========================================
+.venv/
+venv/
+env/
+
+# ==========================================
+# Variables de entorno y secretos (¡CRÍTICO!)
+# ==========================================
+.env
+client_secret.json
+token.json
+credentials.json
+
+# ==========================================
+# Archivos generados, temporales y caché
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+output/
+logs/
+temp/
+
+# ==========================================
+# Archivos del sistema
+# ==========================================
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Extensiones de documentos generados localmente
+# ==========================================
+*.docx
+*.pdf
+
+# Mantener excepciones (si llegas a necesitar forzar un .json específico)
+# !archivo_seguro.json
