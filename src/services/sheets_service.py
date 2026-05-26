@@ -10,14 +10,16 @@ class SheetsService:
     Servicio para leer y actualizar la hoja de control de la Fase 1.
     """
     
-    # Mapeo de columnas (Índice base 1 para gspread)
-    COL_CLIENT_NAME = 1    # A: Nombre del cliente
-    COL_COLLABORATOR = 2   # B: Colaborador
-    COL_DRIVE_LINK = 3     # C: Link Drive
-    COL_DBX_LINK = 4       # D: Link Dropbox
-    COL_COMMENTS = 5       # E: COMENTARIOS PARA CLAUDE
-    COL_STATUS = 6         # F: STATUS
-    COL_OUTPUT_LINK = 7    # G: Entregable (Doc)
+    # NUEVO MAPEO DE COLUMNAS (Índice base 1 para gspread)
+    COL_CLIENT_NAME   = 1  # A: Nombre del cliente
+    COL_RELATIONSHIP  = 2  # B: Tipo de relación (Hijo, Hija, Esposo, Esposa)
+    COL_COLLABORATOR  = 3  # C: Colaborador
+    COL_DCL_LINK      = 4  # D: Link DCL (Dropbox)
+    COL_DBX_FOLDER    = 5  # E: Carpeta Dropbox (múltiples docs)
+    COL_DRIVE_TRANS   = 6  # F: Transcripciones Drive
+    COL_COMMENTS      = 7  # G: COMENTARIO PARA CLAUDE
+    COL_STATUS        = 8  # H: STATUS
+    COL_OUTPUT_LINK   = 9  # I: Entregable (Doc)
 
     def __init__(self):
         self.client = google_manager.get_sheets_client()
@@ -39,7 +41,7 @@ class SheetsService:
 
     def get_pending_rows(self):
         """
-        Busca todas las filas cuyo STATUS (Col F) sea 'PENDING PROCESS'.
+        Busca todas las filas cuyo STATUS (Col H) sea 'PENDING PROCESS'.
         """
         rows_data = []
         try:
@@ -55,13 +57,25 @@ class SheetsService:
                     status = row[self.COL_STATUS - 1].strip()
                     
                     if status == 'PENDING PROCESS':
+                        # Extraemos la data con seguridad (usando dict.get o validando longitud)
+                        def get_col_val(col_idx):
+                            return row[col_idx - 1].strip() if len(row) >= col_idx else ""
+
                         row_data = {
                             'row_idx': row_idx,
-                            'client_name': row[self.COL_CLIENT_NAME - 1] if len(row) >= self.COL_CLIENT_NAME else "Sin Nombre",
-                            'drive_link': row[self.COL_DRIVE_LINK - 1] if len(row) >= self.COL_DRIVE_LINK else "",
-                            'dropbox_link': row[self.COL_DBX_LINK - 1] if len(row) >= self.COL_DBX_LINK else "",
-                            'comments': row[self.COL_COMMENTS - 1] if len(row) >= self.COL_COMMENTS else ""
+                            'client_name': get_col_val(self.COL_CLIENT_NAME),
+                            'relationship': get_col_val(self.COL_RELATIONSHIP),
+                            'collaborator': get_col_val(self.COL_COLLABORATOR),
+                            'dcl_link': get_col_val(self.COL_DCL_LINK),
+                            'dropbox_folder_link': get_col_val(self.COL_DBX_FOLDER),
+                            'drive_transcripts_link': get_col_val(self.COL_DRIVE_TRANS),
+                            'comments': get_col_val(self.COL_COMMENTS)
                         }
+                        
+                        # Validación básica de seguridad
+                        if not row_data['client_name']:
+                            row_data['client_name'] = "Sin Nombre"
+                            
                         rows_data.append(row_data)
             
             return rows_data
@@ -72,7 +86,7 @@ class SheetsService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def update_status(self, row_idx, status):
-        """Actualiza la columna F (STATUS)."""
+        """Actualiza la columna H (STATUS)."""
         try:
             self.sheet.update_cell(row_idx, self.COL_STATUS, status)
             logger.info(f"Fila {row_idx} -> Status actualizado a: {status}")
@@ -82,7 +96,7 @@ class SheetsService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def write_output_link(self, row_idx, link):
-        """Escribe el link del Google Doc generado en la columna G."""
+        """Escribe el link del Google Doc generado en la columna I."""
         try:
             self.sheet.update_cell(row_idx, self.COL_OUTPUT_LINK, link)
             logger.info(f"Fila {row_idx} -> Link guardado exitosamente.")

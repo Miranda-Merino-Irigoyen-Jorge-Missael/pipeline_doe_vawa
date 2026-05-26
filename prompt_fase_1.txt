@@ -1,0 +1,21 @@
+
+Usando lo anterior, necesito que realices una tabla donde se contenga información sobre TODOS los abusos que ha sufrido el cliente relacionados con el caso.
+La tabla deberá de contener las siguientes columnas:
+
+Fragmento del Testimonio
+Evento / Patrón
+Clasificación del Abuso
+Página
+
+Pero cabe aclarar que en la columna 'Evento / Patrón' debe de colocarse de qué va el evento de forma muy breve y cuando se termine eso debe de ponerse al final entre paréntesis si es un Evento o si es un Patrón.
+
+Como el siguiente ejemplo de como debe de ir la estructura de algo en esa columna
+
+EJEMPLO
+
+Agresión física directa resultando en una lesión cutánea y hematoma en el rostro. (Evento)
+Sustracción sistemática de dinero en efectivo de las pertenencias personales para financiar adicciones. (Patrón)
+
+Recuerda que esto anterior solo es un ejemplo de algo inventado, tu solo te basaras en la transcripción.
+
+No inicies con ningún tipo de introducción o presentación, te limitas a solo redactar la tabla.

@@ -6,3 +6,4 @@ python-dotenv
 anthropic[vertex]
 dropbox
 tenacity
+PyPDF2
