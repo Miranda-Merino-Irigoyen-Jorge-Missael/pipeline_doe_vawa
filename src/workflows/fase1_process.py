@@ -20,18 +20,23 @@ class Fase1Workflow:
             "y extraer los hechos tal como se solicitan. Actúa con extrema precisión."
         )
 
-    def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extrae el texto de un archivo PDF usando PyPDF2."""
+    def extract_text_from_file(self, file_path: str) -> str:
+        """Extrae el texto dependiendo de si es PDF o TXT puro."""
         text = ""
         try:
-            with open(pdf_path, 'rb') as f:
-                reader = PyPDF2.PdfReader(f)
-                for page in reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text + "\n"
+            # NUEVO: Leer texto plano sin pasar por librerías problemáticas
+            if file_path.endswith('.txt'):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+            elif file_path.endswith('.pdf'):
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
         except Exception as e:
-            logger.error(f"Error extrayendo texto del PDF {pdf_path}: {e}")
+            logger.error(f"Error extrayendo texto del archivo {file_path}: {e}")
         return text
 
     def run(self):
@@ -62,7 +67,7 @@ class Fase1Workflow:
             sheets_service.update_status(row_idx, "PROCESS (FASE 1)")
             
             # --- 1. DESCARGA Y CONVERSIÓN DE DOCUMENTOS ---
-            pdf_paths = []
+            file_paths = []
             temp_dir = os.path.join("temp", f"caso_{row_idx}")
             os.makedirs(temp_dir, exist_ok=True)
 
@@ -71,29 +76,46 @@ class Fase1Workflow:
                 local_dcl = dropbox_service.download_from_shared_link(dcl_link, os.path.join(temp_dir, "dcl_original.docx"))
                 if local_dcl:
                     pdf_dcl = drive_service.convert_local_docx_to_pdf(local_dcl, os.path.join(temp_dir, "dcl_convertido.pdf"))
-                    if pdf_dcl: pdf_paths.append(pdf_dcl)
+                    if pdf_dcl: file_paths.append(pdf_dcl)
 
-            # B. Descargar Carpeta Dropbox (Evidencias)
+            # B. Descargar Carpeta (Soporta Dropbox y Google Drive)
             if dbx_folder:
-                folder_files = dropbox_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
+                # CORRECCIÓN AQUÍ: Ahora detecta tanto drive.google.com como docs.google.com
+                if "drive.google.com" in dbx_folder or "docs.google.com" in dbx_folder:
+                    folder_files = drive_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
+                else:
+                    folder_files = dropbox_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
+                
                 for i, f_path in enumerate(folder_files):
                     if f_path.endswith('.docx'):
                         pdf_ev = drive_service.convert_local_docx_to_pdf(f_path, f_path.replace('.docx', '.pdf'))
-                        if pdf_ev: pdf_paths.append(pdf_ev)
-                    elif f_path.endswith('.pdf'):
-                        pdf_paths.append(f_path)
+                        if pdf_ev: file_paths.append(pdf_ev)
+                    elif f_path.endswith('.pdf') or f_path.endswith('.txt'):
+                        file_paths.append(f_path)
+                    else:
+                        logger.warning(f"Archivo ignorado (formato no soportado en carpeta WSS): {os.path.basename(f_path)}")
 
             # C. Descargar Transcripciones (Drive)
             if drive_trans:
-                pdf_trans = drive_service.download_drive_link_as_pdf(drive_trans, os.path.join(temp_dir, "transcripcion.pdf"))
-                if pdf_trans: pdf_paths.append(pdf_trans)
+                # Quitamos el ".pdf" forzado para que el servicio de drive decida si bajarlo como txt o pdf
+                trans_path = os.path.join(temp_dir, "transcripcion") 
+                file_trans = drive_service.download_drive_link_as_pdf(drive_trans, trans_path)
+                if file_trans: file_paths.append(file_trans)
 
-            # --- 2. EXTRACCIÓN DE TEXTO ---
+            # --- 2. EXTRACCIÓN DE TEXTO Y DIAGNÓSTICO ---
             documentos_texto = ""
-            for idx, pdf in enumerate(pdf_paths):
-                logger.info(f"Extrayendo texto de: {os.path.basename(pdf)}")
-                texto_extraido = self.extract_text_from_pdf(pdf)
-                documentos_texto += f"\n\n--- DOCUMENTO {idx + 1} ---\n{texto_extraido}\n"
+            for f_path in file_paths:
+                nombre_archivo = os.path.basename(f_path)
+                logger.info(f"Intentando extraer texto de: {nombre_archivo}")
+                texto_extraido = self.extract_text_from_file(f_path)
+                
+                if not texto_extraido.strip():
+                    logger.warning(f"[!] ALERTA: No se pudo extraer texto de '{nombre_archivo}'. El texto salió en blanco.")
+                    texto_extraido = "[El sistema intentó leer este archivo pero se extrajo texto vacío.]"
+                else:
+                    logger.info(f"[✓] Se extrajeron {len(texto_extraido)} caracteres de '{nombre_archivo}'")
+                    
+                documentos_texto += f"\n\n--- DOCUMENTO: {nombre_archivo} ---\n{texto_extraido}\n"
 
             # --- 3. CONSTRUCCIÓN DEL SÚPER PROMPT ---
             prompt = f"""
@@ -108,14 +130,17 @@ DOCUMENTOS EXTRAÍDOS:
 
 --- INSTRUCCIONES PRINCIPALES ---
 Usando lo anterior, necesito que realices una tabla donde se contenga información sobre TODOS los abusos que ha sufrido el cliente relacionados con el caso.
-La tabla deberá de contener las siguientes columnas:
 
+¡REGLA DE ORO!: OBLIGATORIAMENTE debes buscar y extraer eventos de abuso de TODOS Y CADA UNO de los documentos proporcionados (marcados por "--- DOCUMENTO: ---"). No te limites a leer solo el primer documento.
+
+La tabla deberá de contener las siguientes columnas:
 - Fragmento del Testimonio
 - Evento / Patrón
 - Clasificación del Abuso
 - Página
 
 Cabe aclarar que en la columna 'Evento / Patrón' debe de colocarse de qué va el evento de forma muy breve y cuando se termine eso debe de ponerse al final entre paréntesis si es un Evento o si es un Patrón.
+Para la columna 'Página', debes colocar OBLIGATORIAMENTE el NOMBRE DEL DOCUMENTO del cual extrajiste la información (tal como aparece en los encabezados, por ejemplo 'transcripcion.txt'), seguido de la página si es posible identificarla.
 
 EJEMPLO:
 - Agresión física directa resultando en una lesión cutánea y hematoma en el rostro. (Evento)
@@ -134,18 +159,16 @@ Utiliza estilos CSS integrados para que la tabla se vea estética al convertirse
 """
 
             # --- 4. LLAMAR A CLAUDE ---
-            logger.info("Enviando súper prompt a Claude...")
+            logger.info("Enviando súper prompt reforzado a Claude...")
             html_response = vertex_claude.generate_response(
                 prompt=prompt, 
                 system_instruction=self.system_instruction
             )
 
-            # Limpiar posible markdown residual si Claude lo agrega por error
             html_response = html_response.replace("```html", "").replace("```", "").strip()
 
             # --- 5. CREAR GOOGLE DOC ---
             doc_title = f"Analisis_VAWA_{client_name.replace(' ', '_')}"
-            # Pasamos as_html=True para que aplique los estilos de la tabla
             doc_link = drive_service.create_google_doc(title=doc_title, content=html_response, as_html=True)
 
             # --- 6. GUARDAR Y COMPLETAR ---

@@ -18,6 +18,8 @@ class DriveService:
         if not url: return None
         match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
         if match: return match.group(1)
+        match = re.search(r'/folders/([a-zA-Z0-9_-]+)', url)
+        if match: return match.group(1)
         match = re.search(r'id=([a-zA-Z0-9_-]+)', url)
         if match: return match.group(1)
         return url 
@@ -50,7 +52,6 @@ class DriveService:
                 'name': 'Temp_Conversion_DOE',
                 'mimeType': 'application/vnd.google-apps.document'
             }
-            # CORRECCIÓN AQUÍ: Usar MediaFileUpload para rutas de archivos locales
             media = MediaFileUpload(
                 local_docx_path, 
                 mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
@@ -77,37 +78,131 @@ class DriveService:
             return None
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def download_drive_link_as_pdf(self, drive_link: str, output_pdf_path: str) -> str:
+    def download_drive_link_as_pdf(self, drive_link: str, output_base_path: str) -> str:
+        """
+        Descarga enlaces directos de Drive.
+        NUEVO: Si es un Google Doc, lo exporta como .txt automáticamente.
+        """
+        # Limpiamos la extensión base para que no quede como 'archivo.pdf.txt'
+        base_path, _ = os.path.splitext(output_base_path)
+        
         file_id = self.extract_file_id(drive_link)
         if not file_id: return None
             
         try:
-            logger.info(f"Descargando transcripción de Drive (ID: {file_id[:8]}...)")
             file_info = self.drive_service.files().get(fileId=file_id, fields='mimeType, name').execute()
             mime_type = file_info.get('mimeType')
             
-            os.makedirs(os.path.dirname(output_pdf_path), exist_ok=True)
+            os.makedirs(os.path.dirname(base_path), exist_ok=True)
             
             if mime_type == 'application/vnd.google-apps.document':
-                request = self.drive_service.files().export_media(fileId=file_id, mimeType='application/pdf')
+                # ¡MAGIA!: Exportamos los G-Docs directo a texto plano (.txt)
+                final_path = base_path + ".txt"
+                request = self.drive_service.files().export_media(fileId=file_id, mimeType='text/plain')
             else:
+                final_path = base_path + ".pdf"
                 request = self.drive_service.files().get_media(fileId=file_id)
             
-            with open(output_pdf_path, 'wb') as f:
+            with open(final_path, 'wb') as f:
                 downloader = MediaIoBaseDownload(f, request)
                 done = False
                 while not done:
                     status, done = downloader.next_chunk()
                     
+            # Si era un Word, lo bajamos y convertimos a PDF
             if mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-                temp_docx = output_pdf_path + ".docx"
-                os.rename(output_pdf_path, temp_docx)
-                self.convert_local_docx_to_pdf(temp_docx, output_pdf_path)
+                temp_docx = base_path + ".docx"
+                os.rename(final_path, temp_docx)
+                final_pdf = base_path + ".pdf"
+                self.convert_local_docx_to_pdf(temp_docx, final_pdf)
                 if os.path.exists(temp_docx): os.remove(temp_docx)
+                return final_pdf
                 
-            return output_pdf_path
+            return final_path
         except Exception as e:
             logger.error(f"Error descargando archivo de Drive: {e}")
             return None
+
+    def download_folder_contents(self, folder_url: str, download_dir: str) -> list:
+        folder_id = self.extract_file_id(folder_url)
+        if not folder_id: return []
+        
+        downloaded_files = []
+        try:
+            logger.info(f"Explorando enlace de Google Drive: {folder_url}")
+            file_info = self.drive_service.files().get(fileId=folder_id, fields='mimeType, name').execute()
+            
+            if file_info.get('mimeType') != 'application/vnd.google-apps.folder':
+                logger.info(f"El enlace es de un archivo individual ({file_info.get('name')})...")
+                base_path = os.path.join(download_dir, file_info.get('name').replace(" ", "_"))
+                ruta = self.download_drive_link_as_pdf(folder_url, base_path)
+                return [ruta] if ruta else []
+                
+            os.makedirs(download_dir, exist_ok=True)
+            query = f"'{folder_id}' in parents and trashed = false"
+            results = self.drive_service.files().list(q=query, fields="nextPageToken, files(id, name, mimeType)").execute()
+            items = results.get('files', [])
+            
+            if not items:
+                logger.info('No se encontraron archivos en la carpeta de Drive.')
+                return []
+                
+            for item in items:
+                mime = item['mimeType']
+                if mime == 'application/vnd.google-apps.folder':
+                    continue
+                    
+                logger.info(f"Descargando archivo desde Drive: {item['name']} (Tipo: {mime})...")
+                
+                safe_name = item['name'].replace(" ", "_")
+                base_name, _ = os.path.splitext(safe_name)
+                
+                if mime == 'application/vnd.google-apps.document':
+                    # EXPORTACIÓN A .TXT EN LUGAR DE .PDF
+                    file_path = os.path.join(download_dir, base_name + '.txt')
+                    request = self.drive_service.files().export_media(fileId=item['id'], mimeType='text/plain')
+                    
+                    with open(file_path, 'wb') as f:
+                        downloader = MediaIoBaseDownload(f, request)
+                        done = False
+                        while not done:
+                            _, done = downloader.next_chunk()
+                    downloaded_files.append(file_path)
+
+                elif mime == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+                    # ES UN WORD (.docx)
+                    local_docx = os.path.join(download_dir, base_name + '.docx')
+                    request = self.drive_service.files().get_media(fileId=item['id'])
+                    
+                    with open(local_docx, 'wb') as f:
+                        downloader = MediaIoBaseDownload(f, request)
+                        done = False
+                        while not done:
+                            _, done = downloader.next_chunk()
+                    
+                    pdf_path = os.path.join(download_dir, base_name + '.pdf')
+                    ruta = self.convert_local_docx_to_pdf(local_docx, pdf_path)
+                    if ruta: downloaded_files.append(ruta)
+
+                elif mime == 'application/pdf':
+                    # ES UN PDF NATIVO
+                    file_path = os.path.join(download_dir, base_name + '.pdf')
+                    request = self.drive_service.files().get_media(fileId=item['id'])
+                    
+                    with open(file_path, 'wb') as f:
+                        downloader = MediaIoBaseDownload(f, request)
+                        done = False
+                        while not done:
+                            _, done = downloader.next_chunk()
+                    downloaded_files.append(file_path)
+                else:
+                    logger.warning(f"Tipo de archivo ignorado (solo DOC/DOCX/PDF): {item['name']} ({mime})")
+                    
+            logger.info(f"Se descargaron y prepararon {len(downloaded_files)} archivos de la carpeta de Drive.")
+            return downloaded_files
+            
+        except Exception as e:
+            logger.error(f"Error explorando/descargando carpeta de Google Drive: {e}")
+            return downloaded_files
 
 drive_service = DriveService()

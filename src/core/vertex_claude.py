@@ -49,10 +49,10 @@ class VertexClaudeClient:
             
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=8192, # Claude 3.5 Sonnet soporta hasta 8192 tokens de salida
-                system=system_instruction, # Las instrucciones de "quién es" van aquí
+                max_tokens=16000, 
+                system=system_instruction,
                 messages=messages,
-                temperature=0.2 # Temperatura baja para mantener un tono formal/preciso
+                temperature=0.2 
             )
             
             # Extraemos y retornamos únicamente el texto generado
