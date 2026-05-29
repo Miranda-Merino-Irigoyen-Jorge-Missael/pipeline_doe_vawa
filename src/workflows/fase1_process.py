@@ -109,9 +109,29 @@ class Fase1Workflow:
                 documentos_texto += f"\n\n--- DOCUMENTO: {nombre_archivo} ---\n{texto_extraido}\n"
 
             # --- 3. CONSTRUCCIÓN DE INSTRUCCIONES FASE 1 (NUEVO FORMATO JSON) ---
+            
+            # NUEVA LÓGICA: Evaluamos la relación para inyectar la regla de la edad Y el orden cronológico
+            regla_edad = ""
+            relacion_limpia = str(relationship).strip().lower()
+            if relacion_limpia in ['hijo', 'hija']:
+                regla_edad = (
+                    "REGLA ESPECIAL DE EDAD Y CRONOLOGÍA:\n"
+                    "1. EDAD: Como la relación es 'Hija' o 'Hijo', debes identificar la edad del perpetrador (abuser) al momento del evento de abuso. "
+                    "En la llave 'clasificacion', al final del tipo de abuso, concatena la edad así: '(EDAD AB: [edad] AÑOS)'. "
+                    "Si no hay edad exacta, DEBES poner estrictamente: '(NO SE MENCIONA EDAD DEL AB)'.\n"
+                    "2. ORDEN CRONOLÓGICO: El arreglo JSON DEBE estar ordenado cronológicamente (desde que el abuser era más joven hasta lo más reciente). "
+                    "Para los eventos con '(NO SE MENCIONA EDAD DEL AB)', debes analizar el contexto de la historia e INFERIR lógicamente en qué momento ocurrieron "
+                    "para insertarlos en la posición correcta entre los que sí tienen edad. Aunque los ordenes por inferencia, DEBES mantener el texto '(NO SE MENCIONA EDAD DEL AB)'."
+                )
+            else:
+                # Si no es hijo/hija, de todos modos le pedimos orden cronológico normal
+                regla_edad = "REGLA DE ORDEN: El arreglo JSON DEBE estar ordenado cronológicamente, desde los eventos más antiguos hasta los más recientes."
+
             prompt_instructions = f"""
 Tipo de relación con el perpetrador: {relationship}.
 COMENTARIO PARTICULAR: {comments if comments else 'Ninguno.'}
+
+{regla_edad}
 
 --- INSTRUCCIONES PRINCIPALES ---
 Usando los documentos, extrae información sobre TODOS los abusos que ha sufrido el cliente.
