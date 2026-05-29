@@ -27,6 +27,7 @@ class GoogleClientManager:
         self._oauth_creds = None
         self._drive_service = None
         self._sheets_client = None
+        self._docs_service = None 
         self._initialized = True
 
     def _get_oauth_creds(self):
@@ -83,6 +84,36 @@ class GoogleClientManager:
             creds = self._get_oauth_creds()
             self._sheets_client = gspread.authorize(creds)
         return self._sheets_client
+
+    @property
+    def docs_service(self):
+        """Retorna el cliente de Google Docs API v1 (Requerido para modificar Tabs)."""
+        if not self._docs_service:
+            creds = self._get_oauth_creds()
+            self._docs_service = build('docs', 'v1', credentials=creds)
+        return self._docs_service
+
+    # === NUEVOS MÉTODOS PARA MANEJO DE PESTAÑAS (TABS) ===
+    def get_document_with_tabs(self, document_id):
+        """
+        Recupera un documento asegurando que devuelva el contenido de todas las pestañas.
+        """
+        doc = self.docs_service.documents().get(
+            documentId=document_id,
+            includeTabsContent=True
+        ).execute()
+        return doc
+
+    def get_tab_id_by_index(self, document_id, tab_index=0):
+        """
+        Obtiene el tabId de una pestaña específica basándose en su índice.
+        """
+        doc = self.get_document_with_tabs(document_id)
+        tabs = doc.get('tabs', [])
+        
+        if len(tabs) > tab_index:
+            return tabs[tab_index].get('tabProperties', {}).get('tabId')
+        return None
 
 # Instancia global para importar en todo el proyecto
 google_manager = GoogleClientManager()

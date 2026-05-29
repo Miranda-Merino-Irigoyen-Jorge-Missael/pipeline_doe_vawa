@@ -1,30 +1,34 @@
 import os
+import json
 import logging
 import PyPDF2
 from src.services.sheets_service import sheets_service
 from src.services.drive_service import drive_service
 from src.services.dropbox_service import dropbox_service
 from src.core.vertex_claude import vertex_claude
+from src.workflows.fase2_process import fase2_workflow
+
+# IMPORTANTE: Aquí importaremos el nuevo constructor de plantillas que haremos en el Paso 3
+from src.services.template_builder import template_builder 
+from src.core.google_client import google_manager
 
 logger = logging.getLogger(__name__)
 
 class Fase1Workflow:
-    """
-    Orquestador principal de la Fase 1.
-    """
-    
     def __init__(self):
+        # Cambiamos la instrucción para obligar a Claude a devolver JSON puro
         self.system_instruction = (
             "Eres un asistente legal experto en la revisión de casos VAWA. "
-            "Tu tarea es analizar meticulosamente las transcripciones y evidencias, "
-            "y extraer los hechos tal como se solicitan. Actúa con extrema precisión."
+            "Tu tarea es analizar meticulosamente las transcripciones y evidencias. "
+            "DEBES DEVOLVER TU RESPUESTA ESTRICTAMENTE EN FORMATO JSON VÁLIDO. "
+            "No incluyas explicaciones, introducciones, ni bloques de markdown (no uses ```json). Solo el JSON puro."
         )
+        # El ID de tu plantilla base de Google Docs (con los 2 tabs)
+        self.TEMPLATE_ID = "1Mxxs5FHI4XFTVvnXPeLDLVocRnJnTADWsmlZPJ0pQVE"
 
     def extract_text_from_file(self, file_path: str) -> str:
-        """Extrae el texto dependiendo de si es PDF o TXT puro."""
         text = ""
         try:
-            # NUEVO: Leer texto plano sin pasar por librerías problemáticas
             if file_path.endswith('.txt'):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
@@ -40,7 +44,7 @@ class Fase1Workflow:
         return text
 
     def run(self):
-        logger.info(">>> INICIANDO FLUJO DE FASE 1 <<<")
+        logger.info(">>> INICIANDO FLUJO DE FASE 1 Y 2 (ARQUITECTURA JSON PURA) <<<")
         pending_rows = sheets_service.get_pending_rows()
         
         if not pending_rows:
@@ -50,7 +54,7 @@ class Fase1Workflow:
         for row in pending_rows:
             self._process_single_row(row)
             
-        logger.info(">>> FLUJO DE FASE 1 FINALIZADO <<<")
+        logger.info(">>> FLUJO PIPELINE FINALIZADO <<<")
 
     def _process_single_row(self, row_data):
         row_idx = row_data['row_idx']
@@ -64,125 +68,114 @@ class Fase1Workflow:
         logger.info(f"--- Procesando fila {row_idx} | Cliente: {client_name} ---")
 
         try:
-            sheets_service.update_status(row_idx, "PROCESS (FASE 1)")
+            sheets_service.update_status(row_idx, "PROCESS (FASE 1 & 2)")
             
             # --- 1. DESCARGA Y CONVERSIÓN DE DOCUMENTOS ---
             file_paths = []
             temp_dir = os.path.join("temp", f"caso_{row_idx}")
             os.makedirs(temp_dir, exist_ok=True)
 
-            # A. Descargar DCL (Dropbox)
             if dcl_link:
                 local_dcl = dropbox_service.download_from_shared_link(dcl_link, os.path.join(temp_dir, "dcl_original.docx"))
                 if local_dcl:
                     pdf_dcl = drive_service.convert_local_docx_to_pdf(local_dcl, os.path.join(temp_dir, "dcl_convertido.pdf"))
                     if pdf_dcl: file_paths.append(pdf_dcl)
 
-            # B. Descargar Carpeta (Soporta Dropbox y Google Drive)
             if dbx_folder:
-                # CORRECCIÓN AQUÍ: Ahora detecta tanto drive.google.com como docs.google.com
                 if "drive.google.com" in dbx_folder or "docs.google.com" in dbx_folder:
                     folder_files = drive_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
                 else:
                     folder_files = dropbox_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
                 
-                for i, f_path in enumerate(folder_files):
+                for f_path in folder_files:
                     if f_path.endswith('.docx'):
                         pdf_ev = drive_service.convert_local_docx_to_pdf(f_path, f_path.replace('.docx', '.pdf'))
                         if pdf_ev: file_paths.append(pdf_ev)
                     elif f_path.endswith('.pdf') or f_path.endswith('.txt'):
                         file_paths.append(f_path)
-                    else:
-                        logger.warning(f"Archivo ignorado (formato no soportado en carpeta WSS): {os.path.basename(f_path)}")
 
-            # C. Descargar Transcripciones (Drive)
             if drive_trans:
-                # Quitamos el ".pdf" forzado para que el servicio de drive decida si bajarlo como txt o pdf
                 trans_path = os.path.join(temp_dir, "transcripcion") 
                 file_trans = drive_service.download_drive_link_as_pdf(drive_trans, trans_path)
                 if file_trans: file_paths.append(file_trans)
 
-            # --- 2. EXTRACCIÓN DE TEXTO Y DIAGNÓSTICO ---
+            # --- 2. EXTRACCIÓN DE TEXTO ---
             documentos_texto = ""
             for f_path in file_paths:
                 nombre_archivo = os.path.basename(f_path)
-                logger.info(f"Intentando extraer texto de: {nombre_archivo}")
                 texto_extraido = self.extract_text_from_file(f_path)
-                
                 if not texto_extraido.strip():
-                    logger.warning(f"[!] ALERTA: No se pudo extraer texto de '{nombre_archivo}'. El texto salió en blanco.")
                     texto_extraido = "[El sistema intentó leer este archivo pero se extrajo texto vacío.]"
-                else:
-                    logger.info(f"[✓] Se extrajeron {len(texto_extraido)} caracteres de '{nombre_archivo}'")
-                    
                 documentos_texto += f"\n\n--- DOCUMENTO: {nombre_archivo} ---\n{texto_extraido}\n"
 
-            # --- 3. CONSTRUCCIÓN DEL SÚPER PROMPT ---
-            prompt = f"""
-Analiza los siguientes documentos relacionados con el cliente: {client_name}.
+            # --- 3. CONSTRUCCIÓN DE INSTRUCCIONES FASE 1 (NUEVO FORMATO JSON) ---
+            prompt_instructions = f"""
 Tipo de relación con el perpetrador: {relationship}.
-
-COMENTARIO PARTICULAR: 
-{comments if comments else 'Ninguno.'}
-
-DOCUMENTOS EXTRAÍDOS:
-{documentos_texto}
+COMENTARIO PARTICULAR: {comments if comments else 'Ninguno.'}
 
 --- INSTRUCCIONES PRINCIPALES ---
-Usando lo anterior, necesito que realices una tabla donde se contenga información sobre TODOS los abusos que ha sufrido el cliente relacionados con el caso.
+Usando los documentos, extrae información sobre TODOS los abusos que ha sufrido el cliente.
+Debes devolver un ARREGLO JSON donde cada objeto represente un abuso.
 
-¡REGLA DE ORO!: OBLIGATORIAMENTE debes buscar y extraer eventos de abuso de TODOS Y CADA UNO de los documentos proporcionados (marcados por "--- DOCUMENTO: ---"). No te limites a leer solo el primer documento.
+Estructura requerida:
+[
+  {{
+    "fragmento": "Cita o resumen del testimonio",
+    "evento": "Descripción muy breve del evento o patrón (Evento) / (Patrón)",
+    "clasificacion": "Tipo de abuso",
+    "pagina": "Nombre del documento y página"
+  }}
+]
 
-La tabla deberá de contener las siguientes columnas:
-- Fragmento del Testimonio
-- Evento / Patrón
-- Clasificación del Abuso
-- Página
-
-Cabe aclarar que en la columna 'Evento / Patrón' debe de colocarse de qué va el evento de forma muy breve y cuando se termine eso debe de ponerse al final entre paréntesis si es un Evento o si es un Patrón.
-Para la columna 'Página', debes colocar OBLIGATORIAMENTE el NOMBRE DEL DOCUMENTO del cual extrajiste la información (tal como aparece en los encabezados, por ejemplo 'transcripcion.txt'), seguido de la página si es posible identificarla.
-
-EJEMPLO:
-- Agresión física directa resultando en una lesión cutánea y hematoma en el rostro. (Evento)
-- Sustracción sistemática de dinero en efectivo de las pertenencias personales para financiar adicciones. (Patrón)
-
-Recuerda que esto anterior solo es un ejemplo, tú solo te basarás en los documentos proporcionados.
-No inicies con ningún tipo de introducción o presentación, limítate a redactar la tabla directamente.
-
---- INSTRUCCIONES DE FORMATO ESTÉTICO (MUY IMPORTANTE) ---
-Genera tu respuesta ÚNICAMENTE en código HTML válido, sin markdown (sin ```html). 
-Utiliza estilos CSS integrados para que la tabla se vea estética al convertirse en Google Doc:
-- La etiqueta <table> debe tener style="width: 100%; border-collapse: collapse; font-family: Arial, sans-serif;"
-- La etiqueta <th> debe tener style="background-color: #4a86e8; color: white; padding: 10px; border: 1px solid #cccccc; text-align: left;"
-- La etiqueta <td> debe tener style="padding: 10px; border: 1px solid #cccccc; vertical-align: top;"
-- Aplica un fondo gris muy claro (background-color: #f9f9f9;) a las filas pares (<tr>).
+¡REGLA DE ORO!: OBLIGATORIAMENTE debes buscar y extraer eventos de abuso de TODOS Y CADA UNO de los documentos proporcionados.
+NO devuelvas nada más que el arreglo de objetos JSON.
 """
 
-            # --- 4. LLAMAR A CLAUDE ---
-            logger.info("Enviando súper prompt reforzado a Claude...")
-            html_response = vertex_claude.generate_response(
-                prompt=prompt, 
-                system_instruction=self.system_instruction
+            # --- 4. LLAMAR A CLAUDE (FASE 1) CON CACHÉ ---
+            logger.info("Enviando prompt Fase 1 a Claude (Creando caché / Solicitando JSON)...")
+            json_response = vertex_claude.generate_response_with_cache(
+                system_instruction=self.system_instruction,
+                cached_documents_text=documentos_texto,
+                prompt_instructions=prompt_instructions
             )
 
-            html_response = html_response.replace("```html", "").replace("```", "").strip()
+            # Limpiamos y convertimos a diccionario de Python
+            clean_json = json_response.replace("```json", "").replace("```", "").strip()
+            abusos_data = json.loads(clean_json)
+            logger.info(f"[✓] Se extrajeron {len(abusos_data)} abusos en formato JSON estructurado.")
 
-            # --- 5. CREAR GOOGLE DOC ---
+            # --- 5. COPIAR LA PLANTILLA (DRIVE) ---
             doc_title = f"Analisis_VAWA_{client_name.replace(' ', '_')}"
-            doc_link = drive_service.create_google_doc(title=doc_title, content=html_response, as_html=True)
+            document_id, doc_link = drive_service.copy_template(self.TEMPLATE_ID, doc_title)
 
-            # --- 6. GUARDAR Y COMPLETAR ---
-            sheets_service.write_output_link(row_idx, doc_link)
-            sheets_service.update_status(row_idx, "FASE 1 COMPLETED")
-            
-            logger.info(f"--- Fila {row_idx} completada con éxito ---")
+            # --- 6. INYECTAR TABLA EN PESTAÑA 1 ---
+            # Obtenemos el ID de la primera pestaña (Fase 1) usando el índice 0
+            tab1_id = google_manager.get_tab_id_by_index(document_id, tab_index=0)
+            template_builder.inject_fase1_table(document_id, tab1_id, abusos_data)
+
+            # --- 7. EJECUTAR FASE 2 ---
+            logger.info(">>> Detonando Fase 2 automáticamente <<<")
+            fase2_exitosa = fase2_workflow.run_fase_2(
+                document_id=document_id, 
+                client_name=client_name, 
+                documentos_texto=documentos_texto
+            )
+
+            # --- 8. GUARDAR Y COMPLETAR EN SHEETS ---
+            if fase2_exitosa:
+                sheets_service.write_output_link(row_idx, doc_link)
+                sheets_service.update_status(row_idx, "FASE 1 Y 2 COMPLETED")
+                logger.info(f"--- Fila {row_idx} completada con éxito (Ambas Fases) ---")
+            else:
+                sheets_service.write_output_link(row_idx, doc_link)
+                sheets_service.update_status(row_idx, "FASE 1 OK - ERROR FASE 2")
+                logger.warning(f"--- Fila {row_idx} completada parcialmente (Falló Fase 2) ---")
 
         except Exception as e:
             logger.error(f"Error procesando el cliente {client_name}: {e}")
             try:
-                sheets_service.update_status(row_idx, "ERROR EN FASE 1")
+                sheets_service.update_status(row_idx, "ERROR EN PIPELINE")
             except:
                 pass
 
-# Instancia del workflow
 fase1_workflow = Fase1Workflow()

@@ -7,18 +7,16 @@ logger = logging.getLogger(__name__)
 
 class VertexClaudeClient:
     """
-    Cliente para comunicarse con Claude 3.5 Sonnet a través de Google Vertex AI.
+    Cliente para comunicarse con Claude a través de Google Vertex AI,
+    implementando Prompt Caching y Streaming para operaciones masivas.
     """
     def __init__(self):
         self.project_id = Config.PROJECT_ID
         self.location = Config.LOCATION
-        
-        # El nombre oficial del modelo en Vertex AI para Claude 3.5 Sonnet
         self.model = "claude-sonnet-4-6" 
         
         try:
-            # AnthropicVertex detectará automáticamente las credenciales de GCP 
-            # (Ej. las generadas por 'gcloud auth application-default login')
+            # Nos conectamos a Vertex AI directamente como lo requiere la arquitectura
             self.client = AnthropicVertex(
                 project_id=self.project_id,
                 region=self.location,
@@ -32,36 +30,53 @@ class VertexClaudeClient:
         stop=stop_after_attempt(3), 
         wait=wait_exponential(multiplier=1, min=4, max=15)
     )
-    def generate_response(self, prompt, system_instruction=""):
+    def generate_response_with_cache(self, system_instruction, cached_documents_text, prompt_instructions):
         """
-        Envía un prompt a Claude y devuelve el texto de respuesta.
+        Envía un prompt utilizando block-level caching y streaming de texto.
         """
         try:
-            logger.info(f"Enviando petición a {self.model}...")
+            logger.info(f"Enviando petición a {self.model} con Prompt Caching y Streaming (Max 60k)...")
             
-            # Formateamos el mensaje según la estructura requerida por Anthropic
             messages = [
                 {
                     "role": "user",
-                    "content": prompt
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"--- DOCUMENTOS EXTRAÍDOS BASE ---\n{cached_documents_text}",
+                            "cache_control": {"type": "ephemeral"} 
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt_instructions
+                        }
+                    ]
                 }
             ]
             
-            response = self.client.messages.create(
+            output_text = ""
+            
+            # Implementación del SDK de Anthropic para streaming explícito
+            with self.client.messages.stream(
                 model=self.model,
-                max_tokens=16000, 
+                max_tokens=60000, 
                 system=system_instruction,
                 messages=messages,
                 temperature=0.2 
-            )
+            ) as stream:
+                for text in stream.text_stream:
+                    output_text += text
             
-            # Extraemos y retornamos únicamente el texto generado
-            output_text = response.content[0].text
-            logger.info("Respuesta de Claude recibida con éxito.")
+            # Extraemos la metadata de uso del mensaje final unificado
+            final_message = stream.get_final_message()
+            usage = final_message.usage
+            
+            logger.info(f"Uso tokens - Input: {usage.input_tokens} | Output: {usage.output_tokens} | Cache Creation: {getattr(usage, 'cache_creation_input_tokens', 0)} | Cache Read: {getattr(usage, 'cache_read_input_tokens', 0)}")
+            
             return output_text
             
         except Exception as e:
-            logger.error(f"Error generando respuesta con Claude vía Vertex: {e}")
+            logger.error(f"Error generando respuesta con Claude vía Vertex (Caché/Stream): {e}")
             raise
 
 # Instancia global para importar en el flujo de trabajo
