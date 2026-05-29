@@ -10,6 +10,7 @@ class TemplateBuilderService:
     def inject_fase1_table(self, document_id, tab_id, abusos_data):
         """
         Crea la tabla de Fase 1 en la Pestaña 1 y la rellena usando manipulación de índices (AST).
+        Incluye inyección de texto simultánea con formato tipográfico y estético avanzado.
         """
         try:
             logger.info(f"Creando tabla de Fase 1 ({len(abusos_data)} filas) en el documento...")
@@ -17,17 +18,16 @@ class TemplateBuilderService:
             # 1. Crear la tabla vacía al final de la pestaña
             requests = [{
                 'insertTable': {
-                    'rows': len(abusos_data) + 1, # +1 para los encabezados
+                    'rows': len(abusos_data) + 1,
                     'columns': 4,
                     'endOfSegmentLocation': {'tabId': tab_id}
                 }
             }]
             self.docs_service.documents().batchUpdate(documentId=document_id, body={'requests': requests}).execute()
 
-            # 2. Obtener la estructura fresca del documento para calcular los índices de las celdas
+            # 2. Obtener la estructura fresca del documento
             doc = self.docs_service.documents().get(documentId=document_id, includeTabsContent=True).execute()
             
-            # Buscar la pestaña correspondiente
             tab_content = None
             for t in doc.get('tabs', []):
                 if t.get('tabProperties', {}).get('tabId') == tab_id:
@@ -37,17 +37,19 @@ class TemplateBuilderService:
             if not tab_content:
                 raise ValueError("No se encontró el contenido de la pestaña 1.")
 
-            # Buscar la tabla que acabamos de insertar (suele ser el último elemento)
+            # Buscar la tabla que acabamos de insertar
             table_element = None
+            table_start_index = None
             for el in reversed(tab_content):
                 if 'table' in el:
                     table_element = el['table']
+                    table_start_index = el.get('startIndex')
                     break
 
-            if not table_element:
+            if not table_element or table_start_index is None:
                 raise ValueError("No se encontró la tabla recién creada en el AST.")
 
-            # 3. Recolectar índices de celdas e inyectar el texto
+            # 3. Recolectar índices de celdas para inyectar texto y formato
             inserts = []
             
             # Encabezados
@@ -55,33 +57,154 @@ class TemplateBuilderService:
             for col_idx, header_text in enumerate(headers):
                 cell = table_element['tableRows'][0]['tableCells'][col_idx]
                 idx = cell['content'][0]['startIndex']
-                inserts.append((idx, header_text))
+                inserts.append({'idx': idx, 'text': header_text, 'type': 'header'})
 
             # Filas de datos
             for row_idx, abuso in enumerate(abusos_data):
                 row = table_element['tableRows'][row_idx + 1]
-                inserts.append((row['tableCells'][0]['content'][0]['startIndex'], abuso.get('fragmento', 'N/A')))
-                inserts.append((row['tableCells'][1]['content'][0]['startIndex'], abuso.get('evento', 'N/A')))
-                inserts.append((row['tableCells'][2]['content'][0]['startIndex'], abuso.get('clasificacion', 'N/A')))
-                inserts.append((row['tableCells'][3]['content'][0]['startIndex'], abuso.get('pagina', 'N/A')))
+                inserts.append({'idx': row['tableCells'][0]['content'][0]['startIndex'], 'text': abuso.get('fragmento', 'N/A'), 'type': 'data'})
+                inserts.append({'idx': row['tableCells'][1]['content'][0]['startIndex'], 'text': abuso.get('evento', 'N/A'), 'type': 'data'})
+                inserts.append({'idx': row['tableCells'][2]['content'][0]['startIndex'], 'text': abuso.get('clasificacion', 'N/A'), 'type': 'data_center'})
+                inserts.append({'idx': row['tableCells'][3]['content'][0]['startIndex'], 'text': abuso.get('pagina', 'N/A'), 'type': 'data_center'})
 
-            # CRÍTICO: Ordenar los inserts de MAYOR a MENOR índice. 
-            # Si insertamos texto desde arriba hacia abajo, los índices de abajo se desplazan y marcan error.
-            inserts.sort(key=lambda x: x[0], reverse=True)
+            # CRÍTICO: Ordenar de MAYOR a MENOR para evitar el desplazamiento de índices
+            inserts.sort(key=lambda x: x['idx'], reverse=True)
 
             text_requests = []
-            for idx, text in inserts:
+            for item in inserts:
+                idx = item['idx']
+                text = str(item['text'])
+                req_type = item['type']
+                
                 if text:
+                    # Inserción de texto
                     text_requests.append({
                         'insertText': {
                             'location': {'tabId': tab_id, 'index': idx},
-                            'text': str(text)
+                            'text': text
                         }
                     })
+                    
+                    # Formato tipográfico dinámico
+                    if req_type == 'header':
+                        text_requests.append({
+                            'updateTextStyle': {
+                                'range': {'tabId': tab_id, 'startIndex': idx, 'endIndex': idx + len(text)},
+                                'textStyle': {
+                                    'bold': True, 
+                                    'fontSize': {'magnitude': 11, 'unit': 'PT'},
+                                    'foregroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 1.0, 'blue': 1.0}}} # Blanco
+                                },
+                                'fields': 'bold,fontSize,foregroundColor'
+                            }
+                        })
+                        text_requests.append({
+                            'updateParagraphStyle': {
+                                'range': {'tabId': tab_id, 'startIndex': idx, 'endIndex': idx + len(text)},
+                                'paragraphStyle': {'alignment': 'CENTER'},
+                                'fields': 'alignment'
+                            }
+                        })
+                    elif req_type == 'data_center':
+                        text_requests.append({
+                            'updateParagraphStyle': {
+                                'range': {'tabId': tab_id, 'startIndex': idx, 'endIndex': idx + len(text)},
+                                'paragraphStyle': {'alignment': 'CENTER'},
+                                'fields': 'alignment'
+                            }
+                        })
 
             if text_requests:
                 self.docs_service.documents().batchUpdate(documentId=document_id, body={'requests': text_requests}).execute()
-                logger.info("[✓] Tabla de Fase 1 construida y rellenada exitosamente.")
+
+            # 4. APLICAR ESTRUCTURA ESTÉTICA Y CORPORATIVA
+            style_requests = [
+                # Configuración de anchos
+                {
+                    'updateTableColumnProperties': {
+                        'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                        'columnIndices': [0], 
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 240, 'unit': 'PT'}},
+                        'fields': 'width,widthType'
+                    }
+                },
+                {
+                    'updateTableColumnProperties': {
+                        'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                        'columnIndices': [1, 2], 
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 110, 'unit': 'PT'}},
+                        'fields': 'width,widthType'
+                    }
+                },
+                {
+                    'updateTableColumnProperties': {
+                        'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                        'columnIndices': [3], 
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 50, 'unit': 'PT'}},
+                        'fields': 'width,widthType'
+                    }
+                },
+                # Padding y alineación vertical global (Aplica a toda la tabla)
+                {
+                    'updateTableCellStyle': {
+                        'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                        'tableCellStyle': {
+                            'contentAlignment': 'MIDDLE',
+                            'paddingTop': {'magnitude': 5, 'unit': 'PT'},
+                            'paddingBottom': {'magnitude': 5, 'unit': 'PT'},
+                            'paddingLeft': {'magnitude': 6, 'unit': 'PT'},
+                            'paddingRight': {'magnitude': 6, 'unit': 'PT'}
+                        },
+                        'fields': 'contentAlignment,paddingTop,paddingBottom,paddingLeft,paddingRight'
+                    }
+                },
+                # Fondo oscuro para el encabezado (Aplica a rango específico: fila 0)
+                {
+                    'updateTableCellStyle': {
+                        'tableRange': {
+                            'tableCellLocation': {
+                                'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                                'rowIndex': 0,
+                                'columnIndex': 0
+                            },
+                            'rowSpan': 1,
+                            'columnSpan': 4
+                        },
+                        'tableCellStyle': {
+                            'backgroundColor': {
+                                'color': {'rgbColor': {'red': 0.25, 'green': 0.35, 'blue': 0.45}} # Azul corporativo oscuro
+                            }
+                        },
+                        'fields': 'backgroundColor'
+                    }
+                }
+            ]
+
+            # Zebra Striping: Colores alternados para lectura fluida
+            for r_idx in range(1, len(abusos_data) + 1):
+                if r_idx % 2 == 0:
+                    style_requests.append({
+                        'updateTableCellStyle': {
+                            'tableRange': {
+                                'tableCellLocation': {
+                                    'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                                    'rowIndex': r_idx,
+                                    'columnIndex': 0
+                                },
+                                'rowSpan': 1,
+                                'columnSpan': 4
+                            },
+                            'tableCellStyle': {
+                                'backgroundColor': {
+                                    'color': {'rgbColor': {'red': 0.96, 'green': 0.96, 'blue': 0.96}} # Gris claro
+                                }
+                            },
+                            'fields': 'backgroundColor'
+                        }
+                    })
+
+            self.docs_service.documents().batchUpdate(documentId=document_id, body={'requests': style_requests}).execute()
+            logger.info("[✓] Estética profesional, colores y tipografía aplicada a la tabla de Fase 1.")
 
         except Exception as e:
             logger.error(f"Error inyectando tabla Fase 1: {e}")
@@ -89,8 +212,8 @@ class TemplateBuilderService:
 
     def fill_fase2_template(self, document_id, extracted_data):
         """
-        Busca y reemplaza todas las etiquetas en el documento completo
-        con una estrategia agresiva (ignora mayúsculas y variaciones de espacios/guiones).
+        Busca y reemplaza todas las etiquetas en el documento completo.
+        (El contenido de este método se mantiene idéntico a la versión funcional).
         """
         try:
             logger.info("Reemplazando etiquetas de la Fase 2 (Estrategia Agresiva)...")
@@ -98,7 +221,6 @@ class TemplateBuilderService:
             def get_val(key):
                 return str(extracted_data.get(key, "N/A"))
 
-            # 1. Mapeamos la llave lógica a su valor extraído
             base_map = {
                 "cl_nombre": get_val("cl_nombre"),
                 "abuser_nombre": get_val("abuser_nombre"),
@@ -116,9 +238,7 @@ class TemplateBuilderService:
                 "abuser_cargos": get_val("abuser_cargos"),
                 "hijos_comun": get_val("hijos_comun"),
                 "viven_juntos": get_val("viven_juntos"),
-                
                 "conductas_abusivas_dcl": get_val("conductas_abusivas_dcl"),
-                
                 "evidencia_fisico": get_val("evidencia_fisico"),
                 "ausencia_fisico": get_val("ausencia_fisico"),
                 "evidencia_psico": get_val("evidencia_psico"),
@@ -127,7 +247,6 @@ class TemplateBuilderService:
                 "ausencia_financiero": get_val("ausencia_financiero"),
                 "evidencia_legal": get_val("evidencia_legal"),
                 "ausencia_legal": get_val("ausencia_legal"),
-
                 "uscis_aislamiento_ej": get_val("uscis_aislamiento_ej"),
                 "uscis_aislamiento_cons": get_val("uscis_aislamiento_cons"),
                 "uscis_humillacion_ej": get_val("uscis_humillacion_ej"),
@@ -164,7 +283,6 @@ class TemplateBuilderService:
 
             requests = []
             
-            # 2. Procesamos las Tablas Dinámicas y las agregamos al mapa
             impactos = extracted_data.get("tabla_impactos", [])
             base_map["imp_ano_base"] = "\n\n".join([str(i.get("ano", "")) for i in impactos]) or "N/A"
             base_map["imp_accion_base"] = "\n\n".join([str(i.get("accion", "")) for i in impactos]) or "N/A"
@@ -174,23 +292,20 @@ class TemplateBuilderService:
             financieros = extracted_data.get("tabla_financieros", [])
             base_map["fin_desc_base"] = "\n\n".join([str(f.get("descripcion", "")) for f in financieros]) or "N/A"
             base_map["fin_fecha_base"] = "\n\n".join([str(f.get("fecha", "")) for f in financieros]) or "N/A"
-            base_map["fin_fecha_b"] = base_map["fin_fecha_base"] # Caso PDF roto
+            base_map["fin_fecha_b"] = base_map["fin_fecha_base"] 
             base_map["fin_monto_base"] = "\n\n".join([str(f.get("monto", "")) for f in financieros]) or "N/A"
             base_map["fin_cons_base"] = "\n\n".join([str(f.get("consecuencia", "")) for f in financieros]) or "N/A"
 
-            # 3. MAGIA: Generamos peticiones automáticas para espacios y guiones bajos (Case Insensitive)
             for key, value in base_map.items():
                 tag_underscore = f"{{{{{key}}}}}"
                 tag_space = f"{{{{{key.replace('_', ' ')}}}}}"
                 
-                # Petición 1: Busca con guion bajo ignorando mayúsculas/minúsculas
                 requests.append({
                     'replaceAllText': {
                         'containsText': {'text': tag_underscore, 'matchCase': False}, 
                         'replaceText': str(value)
                     }
                 })
-                # Petición 2: Busca con espacio si es diferente
                 if tag_underscore != tag_space:
                     requests.append({
                         'replaceAllText': {
@@ -199,7 +314,6 @@ class TemplateBuilderService:
                         }
                     })
             
-            # 4. Excepciones de tipeo atrapadas en el PDF original
             excepciones = [
                 ("ase}}", ""),
                 ("{{uscis detencion ej", base_map["uscis_detencion_ej"]),
