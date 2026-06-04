@@ -340,4 +340,145 @@ class TemplateBuilderService:
             logger.error(f"Error reemplazando etiquetas en Template 3.2: {e}")
             raise
 
+    def inject_fase3_events(self, document_id, tab_id, fase3_data):
+        """
+        Inyecta los eventos generados por la Fase 3 en la tercera pestaña del documento.
+        Detecta marcadores markdown (**_texto_** o **texto**) y aplica el formato 
+        real de negrita y cursiva usando la API de Google Docs.
+        """
+        import re
+        try:
+            logger.info("Inyectando eventos de Fase 3 y procesando negritas/cursivas...")
+            eventos = fase3_data.get("eventos_vawa", [])
+            
+            if not eventos:
+                logger.warning("No se encontraron eventos en el JSON de Fase 3.")
+                return
+
+            # 1. Construir el texto crudo (aún con marcadores)
+            texto_raw = "DESCRIPCIÓN DE EVIDENCIAS (DOE)\n\n"
+            for ev in eventos:
+                identificador = ev.get("identificador", "EVENTO")
+                tipo = ev.get("tipo_abuso_principal", "No especificado")
+                narrativa = ev.get("contenido_narrativo", "")
+                gmc = "Sí" if ev.get("cumple_gmc") else "No"
+                
+                texto_raw += f"{identificador} - Tipo de Abuso: {tipo} | Cumple GMC: {gmc}\n"
+                texto_raw += f"{narrativa}\n\n"
+                texto_raw += "======================================================\n\n"
+
+            # 2. Parsear el texto: limpiar marcadores y guardar coordenadas de formato
+            # Esta expresión regular atrapa **_texto_**, **texto** o _**texto**_
+            pattern = re.compile(r'\*\*\_?(.*?)\_?\*\*', re.DOTALL)
+            texto_limpio = ""
+            format_ranges = [] # Guardará tuplas: (inicio_relativo, fin_relativo)
+            
+            last_idx = 0
+            for match in pattern.finditer(texto_raw):
+                # Agregar el texto normal anterior al match
+                texto_limpio += texto_raw[last_idx:match.start()]
+                
+                # Marcar inicio del texto formateado
+                start_fmt = len(texto_limpio)
+                
+                # Agregar el texto interior (sin los asteriscos/guiones)
+                inner_text = match.group(1)
+                texto_limpio += inner_text
+                
+                # Marcar fin del texto formateado
+                end_fmt = len(texto_limpio)
+                
+                format_ranges.append((start_fmt, end_fmt))
+                last_idx = match.end()
+            
+            # Agregar el resto del texto final
+            texto_limpio += texto_raw[last_idx:]
+
+            # 3. Insertar un marcador único para descubrir el índice base en Google Docs
+            placeholder = "{{F3_START}}"
+            self.docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={'requests': [{'insertText': {'endOfSegmentLocation': {'tabId': tab_id}, 'text': placeholder}}]}
+            ).execute()
+
+            # 4. Obtener el AST (Árbol del documento) para encontrar dónde quedó el marcador
+            doc = self.docs_service.documents().get(documentId=document_id, includeTabsContent=True).execute()
+            
+            tab_content = None
+            for t in doc.get('tabs', []):
+                if t.get('tabProperties', {}).get('tabId') == tab_id:
+                    tab_content = t['documentTab']['body']['content']
+                    break
+                    
+            if not tab_content:
+                raise ValueError("No se encontró el contenido de la pestaña 3.")
+
+            base_index = None
+            for el in tab_content:
+                if 'paragraph' in el:
+                    for element in el['paragraph']['elements']:
+                        if 'textRun' in element and placeholder in element['textRun']['content']:
+                            base_index = element['startIndex']
+                            break
+                if base_index is not None:
+                    break
+
+            if base_index is None:
+                raise ValueError("No se pudo localizar el marcador de Fase 3 en el documento.")
+
+            # 5. Construir las peticiones: Borrar marcador e Insertar texto limpio
+            requests = [
+                {
+                    'deleteContentRange': {
+                        'range': {
+                            'tabId': tab_id,
+                            'startIndex': base_index,
+                            'endIndex': base_index + len(placeholder)
+                        }
+                    }
+                },
+                {
+                    'insertText': {
+                        'location': {
+                            'tabId': tab_id,
+                            'index': base_index
+                        },
+                        'text': texto_limpio
+                    }
+                }
+            ]
+
+            # 6. Añadir las solicitudes de diseño (negrita y cursiva) usando las coordenadas exactas
+            for start_rel, end_rel in format_ranges:
+                absolute_start = base_index + start_rel
+                absolute_end = base_index + end_rel
+                
+                requests.append({
+                    'updateTextStyle': {
+                        'range': {
+                            'tabId': tab_id,
+                            'startIndex': absolute_start,
+                            'endIndex': absolute_end
+                        },
+                        'textStyle': {
+                            'bold': True,
+                            'italic': True
+                        },
+                        'fields': 'bold,italic'
+                    }
+                })
+
+            # 7. Ejecutar todos los cambios en bloque (Batch Update)
+            if requests:
+                self.docs_service.documents().batchUpdate(
+                    documentId=document_id,
+                    body={'requests': requests}
+                ).execute()
+
+            logger.info(f"[✓] Se inyectaron {len(eventos)} eventos de Fase 3. Formato de negritas aplicado en {len(format_ranges)} citas.")
+
+        except Exception as e:
+            logger.error(f"Error inyectando eventos de Fase 3: {e}")
+            raise
+
 template_builder = TemplateBuilderService()

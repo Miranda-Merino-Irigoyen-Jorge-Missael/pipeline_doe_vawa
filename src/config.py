@@ -8,6 +8,10 @@ class Config:
     # 1. Rutas Base
     BASE_DIR = Path(__file__).resolve().parent.parent
     
+    # Rutas a Prompts
+    PROMPT_FASE_1_PATH = BASE_DIR / "prompt_fase_1.txt"
+    PROMPT_FASE_3_PATH = BASE_DIR / "prompt_fase_3.txt"
+    
     # Cargar variables de entorno
     load_dotenv(BASE_DIR / ".env")
 

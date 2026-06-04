@@ -6,9 +6,10 @@ from src.services.sheets_service import sheets_service
 from src.services.drive_service import drive_service
 from src.services.dropbox_service import dropbox_service
 from src.core.vertex_claude import vertex_claude
-from src.workflows.fase2_process import fase2_workflow
 
-# IMPORTANTE: Aquí importaremos el nuevo constructor de plantillas que haremos en el Paso 3
+from src.workflows.fase2_process import fase2_workflow
+from src.workflows.fase3_process import fase3_workflow  # IMPORTACIÓN DE FASE 3
+
 from src.services.template_builder import template_builder 
 from src.core.google_client import google_manager
 
@@ -23,7 +24,7 @@ class Fase1Workflow:
             "DEBES DEVOLVER TU RESPUESTA ESTRICTAMENTE EN FORMATO JSON VÁLIDO. "
             "No incluyas explicaciones, introducciones, ni bloques de markdown (no uses ```json). Solo el JSON puro."
         )
-        # El ID de tu plantilla base de Google Docs (con los 2 tabs)
+        # El ID de tu plantilla base de Google Docs (Asegúrate de que esta plantilla ya tenga 3 Tabs)
         self.TEMPLATE_ID = "1Mxxs5FHI4XFTVvnXPeLDLVocRnJnTADWsmlZPJ0pQVE"
 
     def extract_text_from_file(self, file_path: str) -> str:
@@ -44,7 +45,7 @@ class Fase1Workflow:
         return text
 
     def run(self):
-        logger.info(">>> INICIANDO FLUJO DE FASE 1 Y 2 (ARQUITECTURA JSON PURA) <<<")
+        logger.info(">>> INICIANDO FLUJO DE FASE 1, 2 Y 3 (ARQUITECTURA JSON PURA) <<<")
         pending_rows = sheets_service.get_pending_rows()
         
         if not pending_rows:
@@ -68,7 +69,7 @@ class Fase1Workflow:
         logger.info(f"--- Procesando fila {row_idx} | Cliente: {client_name} ---")
 
         try:
-            sheets_service.update_status(row_idx, "PROCESS (FASE 1 & 2)")
+            sheets_service.update_status(row_idx, "PROCESS (FASES 1,2,3)")
             
             # --- 1. DESCARGA Y CONVERSIÓN DE DOCUMENTOS ---
             file_paths = []
@@ -109,8 +110,6 @@ class Fase1Workflow:
                 documentos_texto += f"\n\n--- DOCUMENTO: {nombre_archivo} ---\n{texto_extraido}\n"
 
             # --- 3. CONSTRUCCIÓN DE INSTRUCCIONES FASE 1 (NUEVO FORMATO JSON) ---
-            
-            # NUEVA LÓGICA: Evaluamos la relación para inyectar la regla de la edad Y el orden cronológico
             regla_edad = ""
             relacion_limpia = str(relationship).strip().lower()
             if relacion_limpia in ['hijo', 'hija']:
@@ -124,7 +123,6 @@ class Fase1Workflow:
                     "para insertarlos en la posición correcta entre los que sí tienen edad. Aunque los ordenes por inferencia, DEBES mantener el texto '(NO SE MENCIONA EDAD DEL AB)'."
                 )
             else:
-                # Si no es hijo/hija, de todos modos le pedimos orden cronológico normal
                 regla_edad = "REGLA DE ORDEN: El arreglo JSON DEBE estar ordenado cronológicamente, desde los eventos más antiguos hasta los más recientes."
 
             prompt_instructions = f"""
@@ -159,7 +157,6 @@ NO devuelvas nada más que el arreglo de objetos JSON.
                 prompt_instructions=prompt_instructions
             )
 
-            # Limpiamos y convertimos a diccionario de Python
             clean_json = json_response.replace("```json", "").replace("```", "").strip()
             abusos_data = json.loads(clean_json)
             logger.info(f"[✓] Se extrajeron {len(abusos_data)} abusos en formato JSON estructurado.")
@@ -169,7 +166,6 @@ NO devuelvas nada más que el arreglo de objetos JSON.
             document_id, doc_link = drive_service.copy_template(self.TEMPLATE_ID, doc_title)
 
             # --- 6. INYECTAR TABLA EN PESTAÑA 1 ---
-            # Obtenemos el ID de la primera pestaña (Fase 1) usando el índice 0
             tab1_id = google_manager.get_tab_id_by_index(document_id, tab_index=0)
             template_builder.inject_fase1_table(document_id, tab1_id, abusos_data)
 
@@ -181,15 +177,31 @@ NO devuelvas nada más que el arreglo de objetos JSON.
                 documentos_texto=documentos_texto
             )
 
-            # --- 8. GUARDAR Y COMPLETAR EN SHEETS ---
-            if fase2_exitosa:
+            # --- 8. EJECUTAR FASE 3 (NUEVO) ---
+            logger.info(">>> Detonando Fase 3 automáticamente (DOE - Eventos VAWA) <<<")
+            tab3_id = google_manager.get_tab_id_by_index(document_id, tab_index=2)
+            fase3_exitosa = False
+            
+            if tab3_id:
+                fase3_exitosa = fase3_workflow.run_fase_3(
+                    document_id=document_id,
+                    tab_id=tab3_id,
+                    client_name=client_name,
+                    documentos_texto=documentos_texto,
+                    comments=comments
+                )
+            else:
+                logger.error("No se encontró la Pestaña 3 (índice 2) en el documento. Verifica tu plantilla base en Google Docs.")
+
+            # --- 9. GUARDAR Y COMPLETAR EN SHEETS ---
+            if fase2_exitosa and fase3_exitosa:
                 sheets_service.write_output_link(row_idx, doc_link)
-                sheets_service.update_status(row_idx, "FASE 1 Y 2 COMPLETED")
-                logger.info(f"--- Fila {row_idx} completada con éxito (Ambas Fases) ---")
+                sheets_service.update_status(row_idx, "FASES 1, 2 Y 3 COMPLETED")
+                logger.info(f"--- Fila {row_idx} completada con éxito (Todas las fases) ---")
             else:
                 sheets_service.write_output_link(row_idx, doc_link)
-                sheets_service.update_status(row_idx, "FASE 1 OK - ERROR FASE 2")
-                logger.warning(f"--- Fila {row_idx} completada parcialmente (Falló Fase 2) ---")
+                sheets_service.update_status(row_idx, "PROCESADO CON ERRORES")
+                logger.warning(f"--- Fila {row_idx} completada parcialmente (Ocurrió un error en Fase 2 o 3) ---")
 
         except Exception as e:
             logger.error(f"Error procesando el cliente {client_name}: {e}")
