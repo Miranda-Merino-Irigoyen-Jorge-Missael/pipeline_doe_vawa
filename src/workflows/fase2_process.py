@@ -99,7 +99,7 @@ Devuelve un JSON estrictamente con esta estructura y llaves exactas:
 }}
 """
 
-    def run_fase_2(self, document_id, client_name, documentos_texto):
+    def run_fase_2(self, document_id, client_name, documentos_texto, pdf_documents=None):
         try:
             logger.info(f"--- Iniciando Fase 2 (Template 3.2) para el cliente {client_name} ---")
             
@@ -109,12 +109,13 @@ Devuelve un JSON estrictamente con esta estructura y llaves exactas:
             response_text = vertex_claude.generate_response_with_cache(
                 system_instruction=self.system_instruction,
                 cached_documents_text=documentos_texto, 
-                prompt_instructions=prompt_instructions
+                prompt_instructions=prompt_instructions,
+                pdf_documents=pdf_documents
             )
             
             clean_json = response_text.replace("```json", "").replace("```", "").strip()
             extracted_data = json.loads(clean_json)
-            logger.info("[✓] JSON de Template 3.2 extraído y parseado correctamente.")
+            logger.info("[OK] JSON de Template 3.2 extraído y parseado correctamente.")
             
             # Usamos el nuevo método de reemplazo masivo que programamos en el Paso 3
             template_builder.fill_fase2_template(document_id, extracted_data)

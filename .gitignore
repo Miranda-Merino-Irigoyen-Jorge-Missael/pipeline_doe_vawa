@@ -12,6 +12,7 @@ env/
 client_secret.json
 token.json
 credentials.json
+instrucciones_migracion_gemini_a_claude.txt
 
 # ==========================================
 # Archivos generados, temporales y caché

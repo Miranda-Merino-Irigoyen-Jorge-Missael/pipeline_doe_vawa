@@ -18,8 +18,9 @@ class SheetsService:
     COL_DBX_FOLDER    = 5  # E: Carpeta Dropbox (múltiples docs)
     COL_DRIVE_TRANS   = 6  # F: Transcripciones Drive
     COL_COMMENTS      = 7  # G: COMENTARIO PARA CLAUDE
-    COL_STATUS        = 8  # H: STATUS
-    COL_OUTPUT_LINK   = 9  # I: Entregable (Doc)
+    COL_COMPLEMENTO   = 8  # H: COMPLEMENTO (Google Doc / PDF / Word)
+    COL_STATUS        = 9  # I: STATUS
+    COL_OUTPUT_LINK   = 10 # J: Entregable (Doc)
 
     def __init__(self):
         self.client = google_manager.get_sheets_client()
@@ -69,7 +70,8 @@ class SheetsService:
                             'dcl_link': get_col_val(self.COL_DCL_LINK),
                             'dropbox_folder_link': get_col_val(self.COL_DBX_FOLDER),
                             'drive_transcripts_link': get_col_val(self.COL_DRIVE_TRANS),
-                            'comments': get_col_val(self.COL_COMMENTS)
+                            'comments': get_col_val(self.COL_COMMENTS),
+                            'complemento_link': get_col_val(self.COL_COMPLEMENTO)
                         }
                         
                         # Validación básica de seguridad
@@ -86,7 +88,7 @@ class SheetsService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def update_status(self, row_idx, status):
-        """Actualiza la columna H (STATUS)."""
+        """Actualiza la columna I (STATUS)."""
         try:
             self.sheet.update_cell(row_idx, self.COL_STATUS, status)
             logger.info(f"Fila {row_idx} -> Status actualizado a: {status}")
@@ -96,7 +98,7 @@ class SheetsService:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def write_output_link(self, row_idx, link):
-        """Escribe el link del Google Doc generado en la columna I."""
+        """Escribe el link del Google Doc generado en la columna J."""
         try:
             self.sheet.update_cell(row_idx, self.COL_OUTPUT_LINK, link)
             logger.info(f"Fila {row_idx} -> Link guardado exitosamente.")

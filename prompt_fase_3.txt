@@ -8,6 +8,7 @@ o. Deberas de relatarlo en primera persona como si fueras el cliente, usando su 
 3.Debajo de cada ‘EVENT 1’, ‘EVENT 2’ deberás de colocar un titulo que resuma de forma breve lo ocurrido en el evento.
 4. La redacción debe ser en párrafos fluidos y narrativos. NO uses viñetas ni listas dentro de la narración del evento.
 5. Diálogos: Si el cliente cita palabras exactas, insultos o frases del abusador, DEBES ponerlas siempre en **_negritas y cursivas_**.
+6. Deberás de colocar toda la información acerca de los abusos por encima de información de otro tipo, es decir, deberas de darle prioridad a los detalles de los abusos sin importar cuanto sea.
 
 REGLA DE ORO DE REDACCIÓN (LA VOZ DEL CLIENTE):
 - Debes utilizar el léxico, las expresiones y el tono exacto que usa el cliente en su transcripción. NO utilices un lenguaje excesivamente formal, rimbombante o con "estilo de escritor". La crudeza y la voz coloquial del cliente deben mantenerse intactas para preservar la credibilidad.
@@ -22,13 +23,19 @@ Para cada evento redactado, debes integrar de forma natural en los párrafos la 
 - ¿Por qué? (El detonante o excusa del abusador).
 - ¿Para qué? (El objetivo de control, coerción, dominancia o intimidación del abusador).
 
+Es muy importante que todos los eventos contengan la respuesta a estas preguntas con la mayor cantidad de detalle posible. Si alguno de los '7 oros' no está en los documentos, simplemente NO lo incluyas — pero los que SÍ están deben desarrollarse con todo el detalle disponible, nunca de forma resumida o telegráfica.
+
+REGLA DE EXHAUSTIVIDAD OBLIGATORIA:
+Cada evento debe desarrollarse en MÚLTIPLES párrafos completos y detallados. Debes extraer y narrar CADA fragmento de información relevante que esté en los documentos: palabras exactas del abusador, reacciones físicas, contexto de la situación, cómo escaló, qué pasó antes y después. NO condenses ni resumas — expande cada detalle en prosa narrativa fluida. Un evento rico en información debe producir 3, 4 o más párrafos. La longitud de cada evento debe ser proporcional a la cantidad de información disponible en los documentos, nunca inferior.
+
+
 IMPACTO Y CONSECUENCIAS (MANDATORIO):
 En cada evento debes redactar explícitamente las consecuencias narradas por el cliente. 
 - Físicas: Vómitos, mareos, desmayos, insomnio, lesiones, etc.
 - Emocionales/Psicológicas: Miedo, ansiedad, tristeza, humillación, estrés, trauma.
 
 REGLAS INVIOLABLES DE EXCLUSIÓN Y RESTRICCIÓN (CERO INVENTOS):
-1. ESTRICTAMENTE PROHIBIDO INVENTAR: Si falta alguno de los "7 oros" o detalles de las consecuencias, omítelo. No asumas, no deduzcas y no fabriques fechas, lugares ni sentimientos que no estén explícitamente en el texto original.
+1. ESTRICTAMENTE PROHIBIDO INVENTAR HECHOS NUEVOS: "No inventar" significa NO agregar datos, fechas, lugares o sentimientos que NO existan en los documentos. NO significa ser minimalista. Si la información está en el documento, DEBES usarla completa y desarrollarla en detalle. La diferencia es: ❌ Inventar = decir "fue en Chicago" si eso no está en el documento. ✅ Correcto = describir extensamente el golpe con el jarrón porque SÍ está descrito en el documento. Si algún elemento de los '7 oros' simplemente no aparece en los documentos, omite SOLO ese elemento — no reduzcas el resto.
 2. PROTECCIÓN DEL BUEN CARÁCTER MORAL (GMC): Omite por completo cualquier frase, acción o confesión del cliente que denote comportamientos ilegales, lenguaje agresivo innecesario por su parte, inmadurez ("berrinches"), o cualquier cosa que afecte su "Good Moral Character".
 3. CERO CUALIDADES POSITIVAS: Omite cualquier descripción positiva o justificación hacia el abusador (ej. "es buena persona a veces", "trabaja duro"). El enfoque es 100% en la conducta abusiva (Battery o Extreme Cruelty).
 4. ENFOQUE VAWA: La narrativa debe demostrar un patrón de abuso, control y miedo. Elimina cualquier redacción que haga parecer el evento como una simple "pelea de pareja" o un "problema de rebeldía infantil" o “conflictos de la dinámica familiar”.
@@ -44,7 +51,7 @@ El JSON debe seguir EXACTAMENTE la siguiente estructura:
     {
       "identificador": "[Ej. EVENT 1]",
       "tipo_abuso_principal": "[Ej. Físico, Psicológico, Financiero]",
-      "contenido_narrativo": "[Toda la redacción del evento en párrafos fluidos. Usa \n\n para separar párrafos. Incluye aquí las citas en **_negritas y cursivas_**]",
+      "contenido_narrativo": "[CAMPO EXTENSO Y DETALLADO. Toda la redacción del evento en párrafos fluidos. MÍNIMO 5 párrafos sustanciales por evento con información disponible. Agota CADA detalle del documento antes de cerrar este campo. Usa \\n\\n para separar párrafos. Incluye aquí las citas en **_negritas y cursivas_**]",
       "cumple_gmc": [true o false]
     }
   ]

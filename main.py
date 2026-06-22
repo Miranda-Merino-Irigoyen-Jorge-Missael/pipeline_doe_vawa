@@ -16,7 +16,7 @@ logger = logging.getLogger("main")
 
 def main():
     print("\n" + "="*50)
-    print("🚀 PIPELINE DOE VAWA - MODO DESARROLLO (FASE 1)")
+    print("PIPELINE DOE VAWA - MODO DESARROLLO (FASE 1)")
     print("="*50 + "\n")
 
     try:
@@ -29,7 +29,7 @@ def main():
         logger.error(f"ERROR FATAL NO CONTROLADO: {e}", exc_info=True)
     finally:
         print("\n" + "="*50)
-        print("🛑 SISTEMA DETENIDO")
+        print("SISTEMA DETENIDO")
         print("="*50 + "\n")
 
 if __name__ == "__main__":

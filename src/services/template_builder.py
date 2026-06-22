@@ -52,20 +52,20 @@ class TemplateBuilderService:
             # 3. Recolectar índices de celdas para inyectar texto y formato
             inserts = []
             
-            # Encabezados
-            headers = ["Fragmento del Testimonio", "Evento / Patrón", "Clasificación del Abuso", "Página"]
+            # NUEVOS Encabezados
+            headers = ["EDAD DEL ABUSER", "DESCRIPCIÓN", "CONSECUENCIAS", "¿ESTA CONDUCTA CONTINUA EN LA ACTUALIDAD?"]
             for col_idx, header_text in enumerate(headers):
                 cell = table_element['tableRows'][0]['tableCells'][col_idx]
                 idx = cell['content'][0]['startIndex']
                 inserts.append({'idx': idx, 'text': header_text, 'type': 'header'})
 
-            # Filas de datos
+            # Filas de datos apuntando a las nuevas llaves JSON
             for row_idx, abuso in enumerate(abusos_data):
                 row = table_element['tableRows'][row_idx + 1]
-                inserts.append({'idx': row['tableCells'][0]['content'][0]['startIndex'], 'text': abuso.get('fragmento', 'N/A'), 'type': 'data'})
-                inserts.append({'idx': row['tableCells'][1]['content'][0]['startIndex'], 'text': abuso.get('evento', 'N/A'), 'type': 'data'})
-                inserts.append({'idx': row['tableCells'][2]['content'][0]['startIndex'], 'text': abuso.get('clasificacion', 'N/A'), 'type': 'data_center'})
-                inserts.append({'idx': row['tableCells'][3]['content'][0]['startIndex'], 'text': abuso.get('pagina', 'N/A'), 'type': 'data_center'})
+                inserts.append({'idx': row['tableCells'][0]['content'][0]['startIndex'], 'text': abuso.get('edad_abuser', 'N/A'), 'type': 'data_center'})
+                inserts.append({'idx': row['tableCells'][1]['content'][0]['startIndex'], 'text': abuso.get('descripcion', 'N/A'), 'type': 'data'})
+                inserts.append({'idx': row['tableCells'][2]['content'][0]['startIndex'], 'text': abuso.get('consecuencias', 'N/A'), 'type': 'data'})
+                inserts.append({'idx': row['tableCells'][3]['content'][0]['startIndex'], 'text': abuso.get('continua_actualidad', 'N/A'), 'type': 'data_center'})
 
             # CRÍTICO: Ordenar de MAYOR a MENOR para evitar el desplazamiento de índices
             inserts.sort(key=lambda x: x['idx'], reverse=True)
@@ -92,7 +92,7 @@ class TemplateBuilderService:
                                 'range': {'tabId': tab_id, 'startIndex': idx, 'endIndex': idx + len(text)},
                                 'textStyle': {
                                     'bold': True, 
-                                    'fontSize': {'magnitude': 11, 'unit': 'PT'},
+                                    'fontSize': {'magnitude': 10, 'unit': 'PT'}, # Bajamos a 10pt para que entre bien el header largo
                                     'foregroundColor': {'color': {'rgbColor': {'red': 1.0, 'green': 1.0, 'blue': 1.0}}} # Blanco
                                 },
                                 'fields': 'bold,fontSize,foregroundColor'
@@ -117,34 +117,42 @@ class TemplateBuilderService:
             if text_requests:
                 self.docs_service.documents().batchUpdate(documentId=document_id, body={'requests': text_requests}).execute()
 
-            # 4. APLICAR ESTRUCTURA ESTÉTICA Y CORPORATIVA
+            # 4. APLICAR ESTRUCTURA ESTÉTICA Y CORPORATIVA (Nuevos Anchos)
             style_requests = [
-                # Configuración de anchos
+                # Configuración de anchos re-balanceada
                 {
                     'updateTableColumnProperties': {
                         'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
-                        'columnIndices': [0], 
-                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 240, 'unit': 'PT'}},
+                        'columnIndices': [0], # Edad Abuser
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 70, 'unit': 'PT'}},
                         'fields': 'width,widthType'
                     }
                 },
                 {
                     'updateTableColumnProperties': {
                         'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
-                        'columnIndices': [1, 2], 
-                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 110, 'unit': 'PT'}},
+                        'columnIndices': [1], # Descripción
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 180, 'unit': 'PT'}},
                         'fields': 'width,widthType'
                     }
                 },
                 {
                     'updateTableColumnProperties': {
                         'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
-                        'columnIndices': [3], 
-                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 50, 'unit': 'PT'}},
+                        'columnIndices': [2], # Consecuencias
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 180, 'unit': 'PT'}},
                         'fields': 'width,widthType'
                     }
                 },
-                # Padding y alineación vertical global (Aplica a toda la tabla)
+                {
+                    'updateTableColumnProperties': {
+                        'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
+                        'columnIndices': [3], # Continúa actualidad
+                        'tableColumnProperties': {'widthType': 'FIXED_WIDTH', 'width': {'magnitude': 80, 'unit': 'PT'}},
+                        'fields': 'width,widthType'
+                    }
+                },
+                # Padding y alineación vertical global
                 {
                     'updateTableCellStyle': {
                         'tableStartLocation': {'index': table_start_index, 'tabId': tab_id},
@@ -158,7 +166,7 @@ class TemplateBuilderService:
                         'fields': 'contentAlignment,paddingTop,paddingBottom,paddingLeft,paddingRight'
                     }
                 },
-                # Fondo oscuro para el encabezado (Aplica a rango específico: fila 0)
+                # Fondo oscuro para el encabezado
                 {
                     'updateTableCellStyle': {
                         'tableRange': {
@@ -180,7 +188,7 @@ class TemplateBuilderService:
                 }
             ]
 
-            # Zebra Striping: Colores alternados para lectura fluida
+            # Zebra Striping
             for r_idx in range(1, len(abusos_data) + 1):
                 if r_idx % 2 == 0:
                     style_requests.append({
@@ -204,7 +212,7 @@ class TemplateBuilderService:
                     })
 
             self.docs_service.documents().batchUpdate(documentId=document_id, body={'requests': style_requests}).execute()
-            logger.info("[✓] Estética profesional, colores y tipografía aplicada a la tabla de Fase 1.")
+            logger.info("[OK] Estetica profesional, colores y tipografia aplicada a la nueva tabla de Fase 1.")
 
         except Exception as e:
             logger.error(f"Error inyectando tabla Fase 1: {e}")
@@ -334,7 +342,7 @@ class TemplateBuilderService:
                     documentId=document_id, 
                     body={'requests': requests}
                 ).execute()
-                logger.info("[✓] Todas las etiquetas han sido reemplazadas con éxito (Estrategia agresiva).")
+                logger.info("[OK] Todas las etiquetas han sido reemplazadas con exito (Estrategia agresiva).")
 
         except Exception as e:
             logger.error(f"Error reemplazando etiquetas en Template 3.2: {e}")
@@ -475,7 +483,7 @@ class TemplateBuilderService:
                     body={'requests': requests}
                 ).execute()
 
-            logger.info(f"[✓] Se inyectaron {len(eventos)} eventos de Fase 3. Formato de negritas aplicado en {len(format_ranges)} citas.")
+            logger.info(f"[OK] Se inyectaron {len(eventos)} eventos de Fase 3. Formato de negritas aplicado en {len(format_ranges)} citas.")
 
         except Exception as e:
             logger.error(f"Error inyectando eventos de Fase 3: {e}")

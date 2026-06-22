@@ -18,8 +18,19 @@ class Fase3Workflow:
 
     def build_json_prompt(self, client_name, comments):
         return f"""
-Analiza los documentos del cliente: {client_name}.
+Vas a redactar el DOE completo para el cliente: {client_name}.
 COMENTARIO PARTICULAR DEL CASO (instrucciones extra): {comments if comments else 'Ninguno.'}
+
+INSTRUCCIÓN CRÍTICA DE EXTENSIÓN Y EXHAUSTIVIDAD:
+Los documentos fuente contienen decenas de miles de tokens de información. Tu output DEBE reflejar eso.
+Para CADA evento, sigue este proceso OBLIGATORIO antes de escribir:
+1. ESCANEA todos los documentos y extrae CADA fragmento de información relacionado con ese evento (fechas, lugares, palabras exactas, consecuencias físicas, consecuencias emocionales, contexto previo, qué pasó después, cómo afectó la relación, cuánto tiempo duró el patrón, testigos, costos económicos, todo).
+2. LUEGO escribe el contenido_narrativo expandiendo CADA uno de esos fragmentos en prosa fluida. Ningún detalle debe quedar fuera.
+3. NO pares de escribir un evento hasta haber agotado TODO lo que los documentos dicen sobre ese incidente o patrón.
+
+El campo 'contenido_narrativo' de cada evento rico en información DEBE tener mínimo 5 párrafos sustanciales. Un evento con mucha información puede tener 8, 10 o más párrafos — eso es correcto y esperado. Es MEJOR pecar de extenso que de breve.
+
+NO termines el JSON hasta estar seguro de que TODA la información relevante de los documentos fue incorporada en algún evento.
 
 ¡REGLA CRÍTICA DE FORMATO JSON! (ANTI-ERRORES):
 1. ESTÁ ESTRICTAMENTE PROHIBIDO usar comillas dobles (" ") dentro de tus textos. 
@@ -30,7 +41,7 @@ COMENTARIO PARTICULAR DEL CASO (instrucciones extra): {comments if comments else
 Genera los eventos siguiendo estrictamente las instrucciones de tu rol y retorna ÚNICA Y EXCLUSIVAMENTE el JSON solicitado.
 """
 
-    def run_fase_3(self, document_id, tab_id, client_name, documentos_texto, comments):
+    def run_fase_3(self, document_id, tab_id, client_name, documentos_texto, comments, pdf_documents=None):
         try:
             logger.info(f"--- Iniciando Fase 3 (DOE - Eventos VAWA) para el cliente {client_name} ---")
             
@@ -41,12 +52,13 @@ Genera los eventos siguiendo estrictamente las instrucciones de tu rol y retorna
             response_text = vertex_claude.generate_response_with_cache(
                 system_instruction=self.system_instruction,
                 cached_documents_text=documentos_texto, 
-                prompt_instructions=prompt_instructions
+                prompt_instructions=prompt_instructions,
+                pdf_documents=pdf_documents
             )
             
             clean_json = response_text.replace("```json", "").replace("```", "").strip()
             extracted_data = json.loads(clean_json)
-            logger.info("[✓] JSON de Fase 3 (Eventos VAWA) extraído y parseado correctamente.")
+            logger.info("[OK] JSON de Fase 3 (Eventos VAWA) extraído y parseado correctamente.")
             
             # Inyectamos en la tercera pestaña usando el método que creamos hace un momento
             template_builder.inject_fase3_events(document_id, tab_id, extracted_data)

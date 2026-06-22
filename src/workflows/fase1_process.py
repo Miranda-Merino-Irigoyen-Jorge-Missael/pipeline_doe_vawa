@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import PyPDF2
+from docx import Document as DocxDocument
 from src.services.sheets_service import sheets_service
 from src.services.drive_service import drive_service
 from src.services.dropbox_service import dropbox_service
@@ -33,6 +34,9 @@ class Fase1Workflow:
             if file_path.endswith('.txt'):
                 with open(file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
+            elif file_path.endswith('.docx'):
+                doc = DocxDocument(file_path)
+                text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
             elif file_path.endswith('.pdf'):
                 with open(file_path, 'rb') as f:
                     reader = PyPDF2.PdfReader(f)
@@ -42,6 +46,10 @@ class Fase1Workflow:
                             text += page_text + "\n"
         except Exception as e:
             logger.error(f"Error extrayendo texto del archivo {file_path}: {e}")
+        if not text.strip():
+            logger.warning(f"[AVISO] Texto vacío extraído de: {os.path.basename(file_path)}")
+        else:
+            logger.info(f"Texto extraído de {os.path.basename(file_path)}: {len(text)} caracteres")
         return text
 
     def run(self):
@@ -65,6 +73,7 @@ class Fase1Workflow:
         dbx_folder = row_data['dropbox_folder_link']
         drive_trans = row_data['drive_transcripts_link']
         comments = row_data['comments']
+        complemento_link = row_data.get('complemento_link', '')
         
         logger.info(f"--- Procesando fila {row_idx} | Cliente: {client_name} ---")
 
@@ -77,10 +86,16 @@ class Fase1Workflow:
             os.makedirs(temp_dir, exist_ok=True)
 
             if dcl_link:
-                local_dcl = dropbox_service.download_from_shared_link(dcl_link, os.path.join(temp_dir, "dcl_original.docx"))
+                # Detectar si el link apunta a un PDF o DOCX según la URL
+                dcl_url_lower = dcl_link.lower().split('?')[0]
+                dcl_ext = ".pdf" if dcl_url_lower.endswith('.pdf') else ".docx"
+                local_dcl = dropbox_service.download_from_shared_link(dcl_link, os.path.join(temp_dir, f"dcl_original{dcl_ext}"))
                 if local_dcl:
-                    pdf_dcl = drive_service.convert_local_docx_to_pdf(local_dcl, os.path.join(temp_dir, "dcl_convertido.pdf"))
-                    if pdf_dcl: file_paths.append(pdf_dcl)
+                    if dcl_ext == ".docx":
+                        pdf_dcl = drive_service.convert_local_docx_to_pdf(local_dcl, os.path.join(temp_dir, "dcl_convertido.pdf"))
+                        if pdf_dcl: file_paths.append(pdf_dcl)
+                    else:
+                        file_paths.append(local_dcl)
 
             if dbx_folder:
                 if "drive.google.com" in dbx_folder or "docs.google.com" in dbx_folder:
@@ -89,10 +104,7 @@ class Fase1Workflow:
                     folder_files = dropbox_service.download_folder_contents(dbx_folder, os.path.join(temp_dir, "evidencias"))
                 
                 for f_path in folder_files:
-                    if f_path.endswith('.docx'):
-                        pdf_ev = drive_service.convert_local_docx_to_pdf(f_path, f_path.replace('.docx', '.pdf'))
-                        if pdf_ev: file_paths.append(pdf_ev)
-                    elif f_path.endswith('.pdf') or f_path.endswith('.txt'):
+                    if f_path and (f_path.endswith('.docx') or f_path.endswith('.pdf') or f_path.endswith('.txt')):
                         file_paths.append(f_path)
 
             if drive_trans:
@@ -100,48 +112,81 @@ class Fase1Workflow:
                 file_trans = drive_service.download_drive_link_as_pdf(drive_trans, trans_path)
                 if file_trans: file_paths.append(file_trans)
 
-            # --- 2. EXTRACCIÓN DE TEXTO ---
-            documentos_texto = ""
+            if complemento_link:
+                logger.info("Descargando documento COMPLEMENTO...")
+                if "dropbox.com" in complemento_link:
+                    comp_url_lower = complemento_link.lower().split('?')[0]
+                    comp_ext = ".pdf" if comp_url_lower.endswith('.pdf') else ".docx"
+                    complemento_path = os.path.join(temp_dir, f"complemento{comp_ext}")
+                    file_complemento = dropbox_service.download_from_shared_link(complemento_link, complemento_path)
+                else:
+                    complemento_path = os.path.join(temp_dir, "complemento")
+                    file_complemento = drive_service.download_drive_link_as_pdf(complemento_link, complemento_path)
+                if file_complemento:
+                    file_paths.append(file_complemento)
+                    logger.info(f"[OK] Complemento descargado: {os.path.basename(file_complemento)}")
+                else:
+                    logger.warning("No se pudo descargar el documento COMPLEMENTO. Se continúa sin él.")
+
+            # --- 2. SEPARAR PDFs DE ARCHIVOS DE TEXTO ---
+            pdf_documents = []   # Para enviar nativamente a Claude
+            text_paths   = []    # Para extraer texto (docx / txt)
+
             for f_path in file_paths:
+                if f_path and f_path.endswith('.pdf'):
+                    try:
+                        with open(f_path, 'rb') as fbin:
+                            pdf_documents.append({"name": os.path.basename(f_path), "data": fbin.read()})
+                        logger.info(f"PDF nativo: {os.path.basename(f_path)} ({os.path.getsize(f_path)//1024} KB)")
+                    except Exception as e:
+                        logger.warning(f"No se pudo leer el PDF {f_path}: {e}")
+                elif f_path:
+                    text_paths.append(f_path)
+
+            # --- 3. EXTRACCIÓN DE TEXTO (solo docx / txt) ---
+            documentos_texto = ""
+            for f_path in text_paths:
                 nombre_archivo = os.path.basename(f_path)
                 texto_extraido = self.extract_text_from_file(f_path)
                 if not texto_extraido.strip():
                     texto_extraido = "[El sistema intentó leer este archivo pero se extrajo texto vacío.]"
                 documentos_texto += f"\n\n--- DOCUMENTO: {nombre_archivo} ---\n{texto_extraido}\n"
 
-            # --- 3. CONSTRUCCIÓN DE INSTRUCCIONES FASE 1 (NUEVO FORMATO JSON) ---
-            regla_edad = ""
+            logger.info(f"PDFs nativos: {len(pdf_documents)} | Archivos texto: {len(text_paths)} | Chars texto: {len(documentos_texto)}")
+
+# --- 3. CONSTRUCCIÓN DE INSTRUCCIONES FASE 1 (NUEVO FORMATO JSON) ---
+            regla_orden = ""
             relacion_limpia = str(relationship).strip().lower()
             if relacion_limpia in ['hijo', 'hija']:
-                regla_edad = (
+                regla_orden = (
                     "REGLA ESPECIAL DE EDAD Y CRONOLOGÍA:\n"
-                    "1. EDAD: Como la relación es 'Hija' o 'Hijo', debes identificar la edad del perpetrador (abuser) al momento del evento de abuso. "
-                    "En la llave 'clasificacion', al final del tipo de abuso, concatena la edad así: '(EDAD AB: [edad] AÑOS)'. "
-                    "Si no hay edad exacta, DEBES poner estrictamente: '(NO SE MENCIONA EDAD DEL AB)'.\n"
+                    "1. EDAD: Como la relación es 'Hija' o 'Hijo', debes prestar especial atención a la edad del perpetrador.\n"
                     "2. ORDEN CRONOLÓGICO: El arreglo JSON DEBE estar ordenado cronológicamente (desde que el abuser era más joven hasta lo más reciente). "
-                    "Para los eventos con '(NO SE MENCIONA EDAD DEL AB)', debes analizar el contexto de la historia e INFERIR lógicamente en qué momento ocurrieron "
-                    "para insertarlos en la posición correcta entre los que sí tienen edad. Aunque los ordenes por inferencia, DEBES mantener el texto '(NO SE MENCIONA EDAD DEL AB)'."
+                    "Para los eventos donde no se mencione la edad explícita, debes analizar el contexto de la historia e INFERIR lógicamente en qué momento ocurrieron "
+                    "para insertarlos en la posición correcta."
                 )
             else:
-                regla_edad = "REGLA DE ORDEN: El arreglo JSON DEBE estar ordenado cronológicamente, desde los eventos más antiguos hasta los más recientes."
+                regla_orden = "REGLA DE ORDEN: El arreglo JSON DEBE estar ordenado cronológicamente, desde los eventos más antiguos hasta los más recientes."
 
             prompt_instructions = f"""
 Tipo de relación con el perpetrador: {relationship}.
 COMENTARIO PARTICULAR: {comments if comments else 'Ninguno.'}
 
-{regla_edad}
+{regla_orden}
 
 --- INSTRUCCIONES PRINCIPALES ---
 Usando los documentos, extrae información sobre TODOS los abusos que ha sufrido el cliente.
+REQUISITO USCIS: Los abusos a extraer deben ser aquellos que califican bajo los estándares de USCIS para VAWA (abuso físico, crueldad mental extrema, control coercitivo, abuso psicológico o económico).
+
 Debes devolver un ARREGLO JSON donde cada objeto represente un abuso.
 
 Estructura requerida:
 [
   {{
-    "fragmento": "Cita o resumen del testimonio",
-    "evento": "Descripción muy breve del evento o patrón (Evento) / (Patrón)",
-    "clasificacion": "Tipo de abuso",
-    "pagina": "Nombre del documento y página"
+    "edad_abuser": "Edad del perpetrador al momento del evento (ej. '25 años', 'Infancia del cliente', 'No se menciona')",
+    "descripcion": "Descripción CONCISA y directa del evento de abuso. Ve al grano, no incluyas citas exactas ni conteos innecesarios (ej. en vez de 'en al menos 2 ocasiones revisó su celular', pon solo 'revisaba su celular').",
+    "consecuencias": "Consecuencias físicas, psicológicas, emocionales o económicas sufridas.",
+    "continua_actualidad": "Si la conducta ya no ocurre, responde 'No'. Si no se menciona, 'No especificado'. Si la conducta continúa, responde 'Sí' seguido de una BREVE explicación (ej. 'Sí, actualmente le sigue enviando mensajes de acoso')."
   }}
 ]
 
@@ -154,12 +199,13 @@ NO devuelvas nada más que el arreglo de objetos JSON.
             json_response = vertex_claude.generate_response_with_cache(
                 system_instruction=self.system_instruction,
                 cached_documents_text=documentos_texto,
-                prompt_instructions=prompt_instructions
+                prompt_instructions=prompt_instructions,
+                pdf_documents=pdf_documents if pdf_documents else None
             )
 
             clean_json = json_response.replace("```json", "").replace("```", "").strip()
             abusos_data = json.loads(clean_json)
-            logger.info(f"[✓] Se extrajeron {len(abusos_data)} abusos en formato JSON estructurado.")
+            logger.info(f"[OK] Se extrajeron {len(abusos_data)} abusos en formato JSON estructurado.")
 
             # --- 5. COPIAR LA PLANTILLA (DRIVE) ---
             doc_title = f"Analisis_VAWA_{client_name.replace(' ', '_')}"
@@ -174,7 +220,8 @@ NO devuelvas nada más que el arreglo de objetos JSON.
             fase2_exitosa = fase2_workflow.run_fase_2(
                 document_id=document_id, 
                 client_name=client_name, 
-                documentos_texto=documentos_texto
+                documentos_texto=documentos_texto,
+                pdf_documents=pdf_documents if pdf_documents else None
             )
 
             # --- 8. EJECUTAR FASE 3 (NUEVO) ---
@@ -188,7 +235,8 @@ NO devuelvas nada más que el arreglo de objetos JSON.
                     tab_id=tab3_id,
                     client_name=client_name,
                     documentos_texto=documentos_texto,
-                    comments=comments
+                    comments=comments,
+                    pdf_documents=pdf_documents if pdf_documents else None
                 )
             else:
                 logger.error("No se encontró la Pestaña 3 (índice 2) en el documento. Verifica tu plantilla base en Google Docs.")

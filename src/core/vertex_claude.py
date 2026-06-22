@@ -1,3 +1,4 @@
+import base64
 import logging
 from anthropic import AnthropicVertex
 from src.config import Config
@@ -30,27 +31,50 @@ class VertexClaudeClient:
         stop=stop_after_attempt(3), 
         wait=wait_exponential(multiplier=1, min=4, max=15)
     )
-    def generate_response_with_cache(self, system_instruction, cached_documents_text, prompt_instructions):
+    def generate_response_with_cache(self, system_instruction, cached_documents_text, prompt_instructions, pdf_documents=None):
         """
         Envía un prompt utilizando block-level caching y streaming de texto.
+        pdf_documents: lista de dicts {"name": str, "data": bytes} para PDFs escaneados.
         """
         try:
             logger.info(f"Enviando petición a {self.model} con Prompt Caching y Streaming (Max 60k)...")
-            
+
+            content_blocks = []
+
+            # Bloques PDF nativos (para documentos escaneados / imágenes)
+            if pdf_documents:
+                for pdf in pdf_documents:
+                    b64_data = base64.standard_b64encode(pdf["data"]).decode("utf-8")
+                    content_blocks.append({
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": b64_data
+                        },
+                        "title": pdf["name"],
+                        "cache_control": {"type": "ephemeral"}
+                    })
+                logger.info(f"{len(pdf_documents)} PDF(s) adjuntados como bloques nativos.")
+
+            # Bloque de texto (docx/txt ya extraídos)
+            if cached_documents_text.strip():
+                content_blocks.append({
+                    "type": "text",
+                    "text": f"--- DOCUMENTOS EXTRAÍDOS BASE ---\n{cached_documents_text}",
+                    "cache_control": {"type": "ephemeral"}
+                })
+
+            # Instrucciones (sin caché — cambian por caso)
+            content_blocks.append({
+                "type": "text",
+                "text": prompt_instructions
+            })
+
             messages = [
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"--- DOCUMENTOS EXTRAÍDOS BASE ---\n{cached_documents_text}",
-                            "cache_control": {"type": "ephemeral"} 
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt_instructions
-                        }
-                    ]
+                    "content": content_blocks
                 }
             ]
             
@@ -62,7 +86,7 @@ class VertexClaudeClient:
                 max_tokens=60000, 
                 system=system_instruction,
                 messages=messages,
-                temperature=0.2 
+                temperature=0.5 
             ) as stream:
                 for text in stream.text_stream:
                     output_text += text

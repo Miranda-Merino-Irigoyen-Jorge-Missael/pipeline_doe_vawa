@@ -72,7 +72,7 @@ class DriveService:
         doc_id = copied_file.get('id')
         link = copied_file.get('webViewLink')
         
-        logger.info(f"[✓] Documento base creado a partir de plantilla: {link}")
+        logger.info(f"[OK] Documento base creado a partir de plantilla: {link}")
         return doc_id, link
 
     @retry_google_api(max_retries=4, raise_on_fail=True)
@@ -142,12 +142,15 @@ class DriveService:
                 status, done = downloader.next_chunk()
                 
         if mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-            temp_docx = base_path + ".docx"
-            os.rename(final_path, temp_docx)
-            final_pdf = base_path + ".pdf"
-            self.convert_local_docx_to_pdf(temp_docx, final_pdf)
-            if os.path.exists(temp_docx): os.remove(temp_docx)
-            return final_pdf
+            final_path = base_path + ".docx"
+            request = self.drive_service.files().get_media(fileId=file_id)
+            with open(final_path, 'wb') as f:
+                downloader = MediaIoBaseDownload(f, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+            logger.info(f"DOCX descargado directamente: {os.path.basename(final_path)}")
+            return final_path
             
         return final_path
 
@@ -194,10 +197,7 @@ class DriveService:
                     downloader = MediaIoBaseDownload(f, request)
                     done = False
                     while not done: _, done = downloader.next_chunk()
-                
-                pdf_path = os.path.join(download_dir, base_name + '.pdf')
-                ruta = self.convert_local_docx_to_pdf(local_docx, pdf_path)
-                if ruta: downloaded_files.append(ruta)
+                downloaded_files.append(local_docx)
 
             elif mime == 'application/pdf':
                 file_path = os.path.join(download_dir, base_name + '.pdf')

@@ -7,3 +7,4 @@ anthropic[vertex]
 dropbox
 tenacity
 PyPDF2
+python-docx
